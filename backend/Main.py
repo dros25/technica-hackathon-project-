@@ -32,7 +32,7 @@ LIVE_PROMPT = (
     "Otherwise reply with ONE short sentence under 15 words, hazards first "
     "(obstacles, steps, doors, people, vehicles) with direction. No preamble."
 )
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 ELEVEN_VOICE_ID = os.getenv("ELEVEN_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")
 ELEVEN_MODEL = os.getenv("ELEVEN_MODEL", "eleven_flash_v2_5")  # fast + uses fewer credits
 
