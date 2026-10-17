@@ -1,5 +1,5 @@
 """
-hardware.py - laptop-side bridge to the Guardian Arduino.
+hardware.py - laptop-side bridge to the SightSea Arduino.
 
 Install:  pip install pyserial
 Test:     python hardware.py          (prints events, lets you type commands)

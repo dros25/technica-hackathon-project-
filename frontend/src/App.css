@@ -1,13 +1,16 @@
-/* Guardian: a deep-sea porthole. High contrast everywhere (all text pairs pass WCAG AAA). */
+/* SightSea: sunlit shallows. Light, bright, and high contrast (text pairs pass WCAG AAA). */
 :root {
-  --abyss: #031b2e;      /* page */
-  --trench: #08304d;     /* raised surfaces */
-  --current: #0d4670;    /* borders on dark */
-  --foam: #f4fbff;       /* body text      17:1 on abyss */
-  --mist: #b8d4e6;       /* secondary text 11:1 on abyss */
-  --seaglass: #4ff0e2;   /* primary        12:1 on abyss */
-  --buoy: #ffd23f;       /* focus + alarm  12:1 on abyss */
-  --rim: #c9dce8;        /* porthole frame */
+  --foam: #f2faf9;       /* page: pale sea foam */
+  --shallows: #d8f1f0;   /* top of the page: sunlit water */
+  --shell: #ffffff;      /* cards */
+  --ink: #0b2a3f;        /* text           14:1 on foam */
+  --ink-soft: #35566b;   /* secondary text 7.4:1 on foam */
+  --line: #9cc7cf;       /* quiet borders */
+  --lagoon: #0a5c73;     /* primary action, white text 7.5:1 */
+  --turquoise: #2ec4b6;  /* decoration only (waves, sonar) */
+  --coral: #d9432f;      /* focus ring + live accents (non-text, 4:1) */
+  --coral-deep: #962b1a; /* alert text 7:1+ on white */
+  --buoy: #ffd23f;       /* fall alarm screen, ink text 10:1 */
   --font: 'Atkinson Hyperlegible', system-ui, -apple-system, 'Segoe UI', sans-serif;
 }
 
@@ -15,17 +18,17 @@
 
 body {
   margin: 0;
-  background: var(--abyss);
-  color: var(--foam);
+  background: var(--foam);
+  color: var(--ink);
   font-family: var(--font);
   font-size: 1.25rem;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
 }
 
-/* One focus style everywhere: thick buoy-yellow ring */
+/* One focus style everywhere: thick coral ring, easy to spot on light backgrounds */
 :focus-visible {
-  outline: 4px solid var(--buoy);
+  outline: 4px solid var(--coral);
   outline-offset: 4px;
 }
 
@@ -33,17 +36,18 @@ body {
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
-  padding: max(16px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom));
-  /* light fades as you go deeper */
-  background: linear-gradient(180deg, #06304f 0%, var(--abyss) 45%, #021321 100%);
+  padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+  /* sunlight at the surface, fading into clear foam */
+  background:
+    radial-gradient(120% 40% at 50% 0%, var(--shallows) 0%, rgba(216, 241, 240, 0) 70%),
+    var(--foam);
 }
 
 /* ---------- Top bar ---------- */
 .topbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
   max-width: 640px;
   width: 100%;
@@ -54,37 +58,43 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 0;
-  font-size: 1.75rem;
+  flex-basis: 100%;
+  margin: 0 0 4px;
+  font-size: 1.9rem;
   font-weight: 700;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.005em;
+  color: var(--ink);
 }
 
 .brand-mark {
-  width: 34px;
-  height: 34px;
+  width: 40px;
+  height: 40px;
   fill: none;
-  stroke: var(--seaglass);
-  stroke-width: 2.5;
+  stroke: var(--lagoon);
+  stroke-width: 2.4;
   stroke-linecap: round;
+  stroke-linejoin: round;
 }
+.brand-mark .pupil { fill: var(--lagoon); stroke: none; }
+.brand-mark .wave { stroke: var(--turquoise); }
 
 .status {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   margin: 0;
-  padding: 6px 14px;
-  border: 2px solid var(--current);
+  padding: 4px 12px;
+  border: 2px solid var(--line);
   border-radius: 999px;
-  background: var(--trench);
-  font-size: 1rem;
+  background: var(--shell);
+  color: var(--ink);
+  font-size: 0.95rem;
   font-weight: 700;
 }
-.status-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--mist); }
-.status-ok .status-dot { background: var(--seaglass); }
-.status-alert { border-color: var(--buoy); color: var(--buoy); }
-.status-alert .status-dot { background: var(--buoy); }
+.status-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--line); flex-shrink: 0; }
+.status-ok .status-dot { background: var(--lagoon); }
+.status-alert { border-color: var(--coral); color: var(--coral-deep); }
+.status-alert .status-dot { background: var(--coral); }
 
 /* ---------- Stage ---------- */
 .stage {
@@ -96,10 +106,10 @@ body {
   max-width: 640px;
   width: 100%;
   margin: 0 auto;
-  padding-top: 24px;
+  padding-top: 26px;
 }
 
-/* ---------- The porthole (main button) ---------- */
+/* ---------- The porthole (main button): the one memorable piece ---------- */
 .porthole {
   --size: min(80vw, 48dvh, 420px);
   position: relative;
@@ -121,33 +131,38 @@ body {
   inset: 0;
   border-radius: 50%;
   overflow: hidden;
-  /* brass-free frame: thick rim with rivets */
-  border: 14px solid var(--rim);
+  border: 16px solid var(--ink);          /* the porthole's frame */
   box-shadow:
-    0 0 0 4px var(--abyss),
-    0 0 0 8px var(--seaglass),
-    inset 0 0 40px rgba(0, 0, 0, 0.6);
-  background: radial-gradient(circle at 50% 35%, #0f5a8a, var(--abyss) 75%);
+    0 0 0 5px var(--shell),
+    0 0 0 9px var(--turquoise),
+    0 18px 40px rgba(11, 42, 63, 0.18),
+    inset 0 0 30px rgba(11, 42, 63, 0.35);
+  background: radial-gradient(circle at 50% 30%, #bfe9ec, #6fb9c6 80%);
+  transition: transform 0.12s;
 }
-.porthole-glass::after { /* rivets */
+.porthole-glass::after { /* rivets on the frame */
   content: '';
   position: absolute;
-  inset: -14px;
+  inset: -16px;
   border-radius: 50%;
-  background: repeating-conic-gradient(from 11.25deg, var(--abyss) 0 2.5deg, transparent 2.5deg 22.5deg);
-  -webkit-mask: radial-gradient(circle, transparent calc(50% - 8px), #000 calc(50% - 8px) calc(50% - 4px), transparent calc(50% - 4px));
-          mask: radial-gradient(circle, transparent calc(50% - 8px), #000 calc(50% - 8px) calc(50% - 4px), transparent calc(50% - 4px));
+  background: repeating-conic-gradient(from 11.25deg, var(--shallows) 0 3deg, transparent 3deg 22.5deg);
+  -webkit-mask: radial-gradient(circle, transparent calc(50% - 10px), #000 calc(50% - 10px) calc(50% - 5px), transparent calc(50% - 5px));
+          mask: radial-gradient(circle, transparent calc(50% - 10px), #000 calc(50% - 10px) calc(50% - 5px), transparent calc(50% - 5px));
   pointer-events: none;
 }
 
-.porthole video {
+.porthole video,
+.porthole .wearable-view {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  display: block;
   opacity: 0;
   transition: opacity 0.6s;
 }
-.porthole.has-camera video { opacity: 0.85; }
+.porthole.has-camera video,
+.porthole .wearable-view { opacity: 1; }
+.porthole video[hidden] { display: none; }
 
 /* Hazard watcher boxes, drawn on top of the camera */
 .porthole .overlay {
@@ -161,55 +176,54 @@ body {
 .porthole-label {
   position: absolute;
   left: 50%;
-  bottom: 16%;
+  bottom: 13%;
   transform: translateX(-50%);
-  padding: 10px 22px;
+  padding: 10px 24px;
   border-radius: 999px;
-  background: var(--abyss);
-  border: 3px solid var(--seaglass);
-  color: var(--seaglass);
+  background: var(--ink);
+  color: #fff;
   font-size: clamp(1.25rem, 5vw, 1.6rem);
   font-weight: 700;
   white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(11, 42, 63, 0.3);
 }
 
 .porthole:hover .porthole-label,
-.porthole:focus-visible .porthole-label {
-  background: var(--seaglass);
-  color: var(--abyss);
-}
+.porthole:focus-visible .porthole-label { background: var(--lagoon); }
 .porthole:active .porthole-glass { transform: scale(0.98); }
 
-/* Sonar rings: the one bit of motion. Pulse fast while looking, slow in live mode. */
+/* Sonar rings: pulse fast while looking, slowly while Live guide is on */
 .sonar { position: absolute; inset: 0; pointer-events: none; }
 .sonar i {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  border: 3px solid var(--seaglass);
+  border: 4px solid var(--turquoise);
   opacity: 0;
 }
-.is-live .sonar i { animation: ping 4.5s ease-out infinite; }
-.porthole.is-busy .sonar i { animation: ping 1.4s ease-out infinite; }
+.is-live .sonar i { border-color: var(--coral); animation: ping 4.5s ease-out infinite; }
+.porthole.is-busy .sonar i { border-color: var(--lagoon); animation: ping 1.4s ease-out infinite; }
 .sonar i:nth-child(2) { animation-delay: 0.45s !important; }
 .sonar i:nth-child(3) { animation-delay: 0.9s !important; }
 .is-live .sonar i:nth-child(2) { animation-delay: 1.5s !important; }
 .is-live .sonar i:nth-child(3) { animation-delay: 3s !important; }
 
 @keyframes ping {
-  0%   { transform: scale(1);    opacity: 0.9; }
-  100% { transform: scale(1.32); opacity: 0; }
+  0%   { transform: scale(1);   opacity: 0.9; }
+  100% { transform: scale(1.3); opacity: 0; }
 }
 
-/* ---------- Caption ---------- */
+/* ---------- Caption: what SightSea just said ---------- */
 .caption {
   width: 100%;
   min-height: 3.2em;
   margin: 0;
-  padding: 16px 20px;
-  border-left: 6px solid var(--seaglass);
-  border-radius: 6px;
-  background: var(--trench);
+  padding: 18px 22px;
+  border: 2px solid var(--line);
+  border-radius: 14px;
+  box-shadow: inset 8px 0 0 var(--lagoon); /* accent stripe that follows the rounded corner */
+  background: var(--shell);
+  color: var(--ink);
   font-size: clamp(1.3rem, 4.6vw, 1.6rem);
   font-weight: 700;
   line-height: 1.35;
@@ -224,12 +238,12 @@ body {
 }
 
 .mode {
-  min-height: 76px;
-  padding: 12px;
-  border: 3px solid var(--current);
-  border-radius: 14px;
-  background: var(--trench);
-  color: var(--foam);
+  min-height: 80px;
+  padding: 14px;
+  border: 3px solid var(--line);
+  border-radius: 16px;
+  background: var(--shell);
+  color: var(--ink);
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -238,31 +252,31 @@ body {
   gap: 2px;
 }
 .mode-title { font-size: 1.3rem; font-weight: 700; }
-.mode-sub { font-size: 1rem; color: var(--mist); }
-.mode:hover { border-color: var(--seaglass); }
+.mode-sub { font-size: 1rem; color: var(--ink-soft); }
+.mode:hover { border-color: var(--lagoon); }
 .mode[aria-checked='true'] {
-  background: var(--seaglass);
-  border-color: var(--seaglass);
-  color: var(--abyss);
+  background: var(--lagoon);
+  border-color: var(--lagoon);
+  color: #fff;
 }
-.mode[aria-checked='true'] .mode-sub { color: var(--abyss); }
+.mode[aria-checked='true'] .mode-sub { color: #fff; }
 
 /* ---------- Settings ---------- */
 .settings {
   width: 100%;
-  border: 2px solid var(--current);
-  border-radius: 14px;
-  background: var(--trench);
+  border: 2px solid var(--line);
+  border-radius: 16px;
+  background: var(--shell);
 }
 .settings summary {
-  padding: 16px 20px;
+  padding: 18px 22px;
   font-size: 1.3rem;
   font-weight: 700;
   cursor: pointer;
   list-style-position: inside;
 }
-.settings[open] summary { border-bottom: 2px solid var(--current); }
-.settings > :not(summary) { margin: 16px 20px; }
+.settings[open] summary { border-bottom: 2px solid var(--line); }
+.settings > :not(summary) { margin: 18px 22px; }
 
 .toggle {
   display: flex;
@@ -275,49 +289,54 @@ body {
   width: 28px;
   height: 28px;
   flex-shrink: 0;
-  accent-color: var(--seaglass);
+  accent-color: var(--lagoon);
 }
 
 .display-fields {
-  border: 2px solid var(--current);
-  border-radius: 10px;
+  min-width: 0; /* fieldsets default to min-content and overflow narrow screens */
+  border: 2px solid var(--line);
+  border-radius: 12px;
   padding: 14px 16px 18px;
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 .display-fields legend { padding: 0 8px; font-weight: 700; }
-.hint { margin: 0; font-size: 1rem; color: var(--mist); }
+.hint { margin: 0; font-size: 1rem; color: var(--ink-soft); }
 .display-fields label { display: flex; flex-direction: column; gap: 6px; font-weight: 700; }
-.display-fields input[type='text'] {
+.display-fields input[type='text'],
+.voice-select {
   min-height: 52px;
   padding: 10px 14px;
-  border: 3px solid var(--mist);
-  border-radius: 8px;
-  background: var(--abyss);
-  color: var(--foam);
+  width: 100%;
+  border: 3px solid var(--ink-soft);
+  border-radius: 10px;
+  background: var(--shell);
+  color: var(--ink);
   font: inherit;
 }
-.display-fields input[type='text']:focus { border-color: var(--seaglass); }
+.display-fields input[type='text']:focus,
+.voice-select:focus { border-color: var(--lagoon); }
 
 .sensitivity {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 10px;
 }
+.sensitivity.two { grid-template-columns: 1fr 1fr; }
 .mode.sens { min-height: 56px; align-items: center; justify-content: center; text-align: center; }
 
 .secondary {
   min-height: 56px;
-  border: 3px solid var(--seaglass);
-  border-radius: 10px;
-  background: transparent;
-  color: var(--seaglass);
+  border: 3px solid var(--lagoon);
+  border-radius: 12px;
+  background: var(--shell);
+  color: var(--lagoon);
   font: inherit;
   font-weight: 700;
   cursor: pointer;
 }
-.secondary:hover { background: var(--seaglass); color: var(--abyss); }
+.secondary:hover { background: var(--lagoon); color: #fff; }
 
 /* ---------- Fall alarm: a solid rescue-buoy screen, no flashing ---------- */
 .alarm {
@@ -331,11 +350,11 @@ body {
   gap: 18px;
   padding: 24px;
   background: var(--buoy);
-  color: var(--abyss);
+  color: var(--ink);
   text-align: center;
 }
 .alarm h2 { margin: 0; font-size: clamp(2.6rem, 12vw, 4.5rem); line-height: 1.05; }
-/* Countdown: the buoy-yellow screen with a giant number; the full alarm keeps yellow too */
+.alarm p { margin: 0; max-width: 24ch; font-size: 1.4rem; font-weight: 700; }
 .alarm .countdown {
   margin: 0;
   max-width: none;
@@ -344,45 +363,24 @@ body {
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
-.alarm p { margin: 0; max-width: 22ch; font-size: 1.4rem; font-weight: 700; }
 .alarm-ok {
   margin-top: 16px;
   width: min(100%, 420px);
   min-height: 120px;
   border: 0;
-  border-radius: 20px;
-  background: var(--abyss);
+  border-radius: 22px;
+  background: var(--ink);
   color: var(--buoy);
   font: inherit;
   font-size: 2.4rem;
   font-weight: 700;
   cursor: pointer;
 }
-.alarm-ok:focus-visible { outline-color: var(--abyss); }
+.alarm-ok:focus-visible { outline-color: var(--ink); }
 
 @media (prefers-reduced-motion: reduce) {
   .sonar i { animation: none !important; }
   .porthole.is-busy .sonar i:first-child,
   .is-live .sonar i:first-child { opacity: 1; transform: scale(1.06); }
-  .porthole video { transition: none; }
+  .porthole video, .porthole-glass { transition: none; }
 }
-
-/* Wearable webcam view inside the porthole */
-.porthole .wearable-view {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  opacity: 0.85;
-}
-.sensitivity.two { grid-template-columns: 1fr 1fr; }
-
-.voice-select {
-  min-height: 52px;
-  padding: 10px 14px;
-  border: 3px solid var(--mist);
-  border-radius: 8px;
-  background: var(--abyss);
-  color: var(--foam);
-  font: inherit;
-}
-.voice-select:focus { border-color: var(--seaglass); }

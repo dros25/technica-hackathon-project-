@@ -1,5 +1,5 @@
 /*
-  Guardian wearable - Arduino side (Technica 2026)
+  SightSea wearable - Arduino side (Technica 2026)
   Board: Arduino UNO R4 WiFi + Grove Base Shield (set shield switch to 5V)
 
   Wiring (Grove cables):
@@ -405,7 +405,7 @@ void setup() {
   Wire.begin();
 
   lcd.begin(16, 2);
-  showLines("Guardian", "Starting...");
+  showLines("SightSea", "Starting...");
   lcd.setRGB(0, 80, 255);
 
   accelOk = initAccel();

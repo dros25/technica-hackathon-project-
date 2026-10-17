@@ -1,5 +1,5 @@
 """
-Guardian backend (Technica 2026)
+SightSea backend (Technica 2026)
 
 Run:   cd backend && python Main.py
 .env:  GEMINI_API_KEY=...        (required for narration)
@@ -352,7 +352,7 @@ app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10 MB images max
 @app.route("/health")
 def health():
     return jsonify({
-        "status": "Guardian backend online",
+        "status": "SightSea backend online",
         "hardware": "mock" if getattr(hw, "is_mock", False) else "arduino",
         "gemini": bool(gemini_client),
         "elevenlabs": bool(eleven_client),
@@ -522,7 +522,7 @@ def test_event(event_type):
 @app.route("/<path:path>")
 def frontend(path):
     if not FRONTEND_BUILD:
-        return jsonify({"status": "Guardian backend online (no frontend build yet)"})
+        return jsonify({"status": "SightSea backend online (no frontend build yet)"})
     full = os.path.join(FRONTEND_BUILD, path)
     if path and os.path.isfile(full):
         return send_from_directory(FRONTEND_BUILD, path)

@@ -736,11 +736,13 @@ export default function App() {
       <header className="topbar">
         <h1 className="brand">
           <svg className="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
-            <path d="M2 20c4 0 4-4 8-4s4 4 8 4 4-4 8-4 4 4 4 4" />
-            <path d="M2 26c4 0 4-4 8-4s4 4 8 4 4-4 8-4 4 4 4 4" />
-            <circle cx="16" cy="9" r="5" />
+            {/* an eye above the waves: sight + sea */}
+            <path d="M5 10c3-4.5 7-6.5 11-6.5s8 2 11 6.5c-3 4.5-7 6.5-11 6.5S8 14.5 5 10z" />
+            <circle className="pupil" cx="16" cy="10" r="2.6" />
+            <path className="wave" d="M2 22c3.5 0 3.5-3 7-3s3.5 3 7 3 3.5-3 7-3 3.5 3 7 3" />
+            <path className="wave" d="M2 28c3.5 0 3.5-3 7-3s3.5 3 7 3 3.5-3 7-3 3.5 3 7 3" />
           </svg>
-          Guardian
+          SightSea
         </h1>
         <p className={`status status-${status.tone}`} {...hover(status.text)} tabIndex={0}>
           <span className="status-dot" aria-hidden="true" />
@@ -778,7 +780,7 @@ export default function App() {
 
         <p className="caption" role="status" aria-live="polite">{caption}</p>
 
-        <div className="modes" role="radiogroup" aria-label="How Guardian describes the scene">
+        <div className="modes" role="radiogroup" aria-label="How SightSea describes the scene">
           <button
             type="button"
             role="radio"
