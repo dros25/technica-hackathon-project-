@@ -12,8 +12,8 @@
   Library: "Grove - LCD RGB Backlight" (Arduino IDE > Library Manager)
 
   Serial protocol (115200 baud, one message per line):
-    Arduino -> laptop:  BTN | FALL | CANCEL | LIGHT:<0-1023> | READY | ERR:<msg>
-    Laptop -> Arduino:  LCD:<line1>|<line2>   ALARM:ON   ALARM:OFF   TESTFALL   CANCEL   PING
+    Arduino -> laptop:  BTN | FALL_PENDING:<sec> | FALL (alarm) | CANCEL | LIGHT:<0-1023> | FALLDET:ON/OFF | READY | ERR:<msg>
+    Laptop -> Arduino:  LCD:<line1>|<line2>   ALARM:ON/OFF   TESTFALL   CANCEL   FALLDET:ON/OFF   PING
                         DIAG (accel status + I2C scan)   STREAM (toggle MAG:<g> output)
 */
 
@@ -47,7 +47,15 @@ unsigned long freefallStart = 0;
 
 rgb_lcd lcd;
 
-enum Mode { NORMAL, IMPACT, FALLEN };
+// NORMAL -> IMPACT (hit/free-fall seen) -> PENDING (30 s countdown) -> FALLEN (full alarm)
+enum Mode { NORMAL, IMPACT, PENDING, FALLEN };
+const unsigned long COUNTDOWN_MS    = 30000;  // time to cancel before the alarm sounds
+const unsigned long DOUBLE_CLICK_MS = 600;    // max gap between the two clicks of a cancel
+bool fallDetection = true;                    // toggled from the phone (FALLDET:ON/OFF)
+unsigned long pendingStart = 0;
+long lastShownSec = -1;
+unsigned long lastPressTime = 0;
+unsigned long chirpUntil = 0;
 Mode mode = NORMAL;
 unsigned long impactTime = 0;
 unsigned long stillStart = 0;
@@ -204,7 +212,19 @@ void showNormal() {
 }
 
 // ---------- Fall handling ----------
+// Step 1: fall detected -> 30 s countdown the user can cancel with a double-click
 void triggerFall() {
+  mode = PENDING;
+  pendingStart = millis();
+  lastShownSec = -1;
+  lastPressTime = 0;
+  Serial.print("FALL_PENDING:");
+  Serial.println(COUNTDOWN_MS / 1000);
+  lcd.setRGB(255, 160, 0);  // amber while counting down
+}
+
+// Step 2: nobody cancelled -> full alarm
+void triggerAlarm() {
   mode = FALLEN;
   Serial.println("FALL");
   showLines("I've fallen!", "Please help me");
@@ -214,14 +234,32 @@ void triggerFall() {
 void cancelFall() {
   mode = NORMAL;
   stillStart = 0;
+  lastPressTime = 0;
+  chirpUntil = 0;
   digitalWrite(BUZZER_PIN, LOW);
   beepOn = false;
   Serial.println("CANCEL");
   showNormal();
 }
 
+void updatePending(unsigned long) {
+  if (mode != PENDING) return;
+  // Use a fresh millis(): pendingStart may have been set after this loop's `now` was taken,
+  // and now - pendingStart would underflow and fire the alarm instantly.
+  unsigned long now = millis();
+  unsigned long elapsed = now - pendingStart;
+  if (elapsed >= COUNTDOWN_MS) { triggerAlarm(); return; }
+  long secLeft = (COUNTDOWN_MS - elapsed + 999) / 1000;
+  if (secLeft != lastShownSec) {
+    lastShownSec = secLeft;
+    showLines("Fall! Alarm " + String(secLeft) + "s", "Double-click=OK");
+    // soft chirp every 10 s, then every second for the last 5
+    if (secLeft % 10 == 0 || secLeft <= 5) chirpUntil = now + 80;
+  }
+}
+
 void updateFall(unsigned long now) {
-  if (!accelOk || now - lastAccelRead < 20) return;  // ~50 Hz
+  if (!fallDetection || !accelOk || now - lastAccelRead < 20) return;  // ~50 Hz
   lastAccelRead = now;
 
   float mag;
@@ -264,7 +302,8 @@ void updateFall(unsigned long now) {
 void updateBuzzer(unsigned long now) {
   bool shouldBeep = (mode == FALLEN) || laptopAlarm;
   if (!shouldBeep) {
-    if (beepOn) { digitalWrite(BUZZER_PIN, LOW); beepOn = false; }
+    bool chirp = now < chirpUntil;  // short countdown chirps
+    if (chirp != beepOn) { digitalWrite(BUZZER_PIN, chirp ? HIGH : LOW); beepOn = chirp; }
     return;
   }
   unsigned long interval = beepOn ? 200 : 300;
@@ -282,8 +321,14 @@ void updateButton(unsigned long now) {
     lastButtonChange = now;
     lastButton = reading;
     if (reading == HIGH) {  // pressed
-      if (mode == FALLEN || mode == IMPACT) cancelFall();
-      else Serial.println("BTN");
+      if (mode == PENDING || mode == FALLEN) {
+        // During a fall only a double-click cancels, so a stray press can't
+        if (lastPressTime != 0 && now - lastPressTime <= DOUBLE_CLICK_MS) cancelFall();
+        else lastPressTime = now;
+      } else {
+        if (mode == IMPACT) { mode = NORMAL; stillStart = 0; }  // they're moving the button: fine
+        Serial.println("BTN");
+      }
     }
   }
 }
@@ -314,7 +359,16 @@ void handleCommand(String cmd) {
   } else if (cmd == "TESTFALL") {
     triggerFall();
   } else if (cmd == "CANCEL") {          // "I'm okay" from the phone
-    if (mode == FALLEN || mode == IMPACT) cancelFall();
+    if (mode == PENDING || mode == FALLEN) cancelFall();
+    else if (mode == IMPACT) { mode = NORMAL; stillStart = 0; }
+  } else if (cmd == "FALLDET:ON") {
+    fallDetection = true;
+    Serial.println("FALLDET:ON");
+  } else if (cmd == "FALLDET:OFF") {
+    fallDetection = false;
+    if (mode == PENDING || mode == FALLEN) cancelFall();
+    else if (mode == IMPACT) { mode = NORMAL; stillStart = 0; }
+    Serial.println("FALLDET:OFF");
   } else if (cmd == "PING") {
     Serial.println("READY");
   } else if (cmd == "DIAG") {
@@ -374,5 +428,6 @@ void loop() {
   updateButton(now);
   updateFall(now);
   updateLight(now);
+  updatePending(now);
   updateBuzzer(now);
 }

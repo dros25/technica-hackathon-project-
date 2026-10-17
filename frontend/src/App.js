@@ -61,7 +61,9 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [online, setOnline] = useState(null);
   const [wearable, setWearable] = useState({ connected: true, mock: false });
-  const [fall, setFall] = useState(false);
+  const [fall, setFall] = useState(null); // null | 'pending' (countdown) | 'alarm'
+  const [secondsLeft, setSecondsLeft] = useState(0);
+  const [fallDetection, setFallDetection] = useState(() => loadSetting('fallDetection', true));
   const [cameraReady, setCameraReady] = useState(false);
   const [readAloud, setReadAloud] = useState(() => loadSetting('readAloud', true));
   const [premiumVoice, setPremiumVoice] = useState(() => loadSetting('premiumVoice', true));
@@ -71,7 +73,10 @@ export default function App() {
   const videoRef = useRef(null);
   const audioRef = useRef(null);
   const busyRef = useRef(false);
-  const fallRef = useRef(false);
+  const fallRef = useRef(null);
+  const fallDeadlineRef = useRef(0);
+  const fallSpokenRef = useRef(new Set());
+  const fallDetectionRef = useRef(fallDetection);
   const readAloudRef = useRef(readAloud);
   const premiumRef = useRef(premiumVoice);
   const cameraMsgRef = useRef('The camera is starting. Try again in a moment.');
@@ -242,6 +247,60 @@ export default function App() {
     speak(msg);
   };
 
+  // ---------- Fall countdown ----------
+  const startCountdown = useCallback((seconds) => {
+    fallDeadlineRef.current = Date.now() + seconds * 1000;
+    fallSpokenRef.current = new Set();
+    setSecondsLeft(seconds);
+    setFall('pending');
+    setCaption(`Fall detected. Alarm in ${seconds} seconds unless you cancel.`);
+    speak(`Fall detected. The alarm will sound in ${seconds} seconds. Double-click your button, or tap I'm okay, to cancel.`);
+  }, [speak]);
+
+  const soundAlarm = useCallback(() => {
+    if (fallRef.current === 'alarm') return;
+    fallRef.current = 'alarm';
+    setFall('alarm');
+    setCaption('Alarm on. Your wearable is asking people nearby for help.');
+    speak("Alarm on. Asking people nearby for help. Double-click your button, or tap I'm okay, to stop it.");
+  }, [speak]);
+
+  useEffect(() => {
+    if (fall !== 'pending') return undefined;
+    const tick = setInterval(() => {
+      const left = Math.max(0, Math.ceil((fallDeadlineRef.current - Date.now()) / 1000));
+      setSecondsLeft(left);
+      const spoken = fallSpokenRef.current;
+      if ((left === 20 || left === 10 || left === 5) && !spoken.has(left)) {
+        spoken.add(left);
+        speak(`${left} seconds.`);
+      }
+      // The wearable sends the alarm itself; this is a backup if that message is lost
+      if (left === 0 && Date.now() - fallDeadlineRef.current > 2000) soundAlarm();
+    }, 250);
+    return () => clearInterval(tick);
+  }, [fall, speak, soundAlarm]);
+
+  // ---------- Fall detection on/off ----------
+  const sendFallDetection = useCallback((on) => {
+    api('/fall-detection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: on }),
+    }).catch(() => {});
+  }, []);
+
+  const toggleFallDetection = (on) => {
+    setFallDetection(on);
+    fallDetectionRef.current = on;
+    saveSetting('fallDetection', on);
+    sendFallDetection(on);
+    if (!on && fallRef.current) { setFall(null); stopSpeaking(); }
+    const msg = on ? 'Fall detection on.' : 'Fall detection off.';
+    setCaption(msg);
+    speak(msg);
+  };
+
   // ---------- Wearable events ----------
   useEffect(() => {
     const timer = setInterval(async () => {
@@ -250,14 +309,19 @@ export default function App() {
         const data = await res.json();
         setOnline(true);
         setWearable({ connected: data.connected !== false, mock: !!data.mock });
+        // Server or wearable restarted with a different setting: put the user's choice back
+        if (typeof data.fall_detection === 'boolean' && data.fall_detection !== fallDetectionRef.current) {
+          sendFallDetection(fallDetectionRef.current);
+        }
         (data.events || []).forEach((ev) => {
           if (ev.type === 'button') {
             describeRef.current('tap');
+          } else if (ev.type === 'fall_pending') {
+            startCountdown(ev.seconds || 30);
           } else if (ev.type === 'fall') {
-            setFall(true);
-            speak("Fall detected. If you're okay, press your button or tap I'm okay.");
+            soundAlarm();
           } else if (ev.type === 'cancel') {
-            setFall(false);
+            setFall(null);
             stopSpeaking();
             setCaption("Fall alert cancelled. Glad you're safe.");
             speak("Okay, glad you're safe.");
@@ -277,10 +341,10 @@ export default function App() {
       }
     }, 1000);
     return () => clearInterval(timer);
-  }, [speak, stopSpeaking]);
+  }, [speak, stopSpeaking, startCountdown, soundAlarm, sendFallDetection]);
 
   const imOkay = async () => {
-    setFall(false);
+    setFall(null);
     stopSpeaking();
     setCaption("Fall alert cancelled. Glad you're safe.");
     speak("Okay, glad you're safe.");
@@ -393,6 +457,11 @@ export default function App() {
             <span>Read buttons aloud when I point at them</span>
           </label>
 
+          <label className="toggle" {...hover(`Fall detection. ${fallDetection ? 'On' : 'Off'}`)}>
+            <input type="checkbox" checked={fallDetection} onChange={(e) => toggleFallDetection(e.target.checked)} />
+            <span>Fall detection, with a 30 second countdown before the alarm</span>
+          </label>
+
           <label className="toggle" {...hover(`Natural voice for descriptions. ${premiumVoice ? 'On' : 'Off'}`)}>
             <input type="checkbox" checked={premiumVoice} onChange={(e) => setPremiumVoice(e.target.checked)} />
             <span>Use the natural voice for tap descriptions</span>
@@ -416,11 +485,25 @@ export default function App() {
         </details>
       </main>
 
-      {fall && (
-        <div className="alarm" role="alertdialog" aria-modal="true" aria-labelledby="fall-title" aria-describedby="fall-desc">
+      {fall === 'pending' && (
+        <div className="alarm is-pending" role="alertdialog" aria-modal="true" aria-labelledby="fall-title" aria-describedby="fall-desc">
           <h2 id="fall-title">Fall detected</h2>
-          <p id="fall-desc">Your wearable is asking people nearby for help.</p>
+          <p className="countdown" aria-hidden="true">{secondsLeft}</p>
+          <p id="fall-desc">
+            The alarm sounds in {secondsLeft} {secondsLeft === 1 ? 'second' : 'seconds'}.
+            Double-click your button to cancel.
+          </p>
           <button type="button" className="alarm-ok" onClick={imOkay} autoFocus {...hover("I'm okay. Cancel the alarm")}>
+            I'm okay
+          </button>
+        </div>
+      )}
+
+      {fall === 'alarm' && (
+        <div className="alarm" role="alertdialog" aria-modal="true" aria-labelledby="alarm-title" aria-describedby="alarm-desc">
+          <h2 id="alarm-title">Alarm on</h2>
+          <p id="alarm-desc">Your wearable is asking people nearby for help. Double-click your button to stop it.</p>
+          <button type="button" className="alarm-ok" onClick={imOkay} autoFocus {...hover("I'm okay. Stop the alarm")}>
             I'm okay
           </button>
         </div>

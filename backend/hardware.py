@@ -7,7 +7,9 @@ Test:     python hardware.py          (prints events, lets you type commands)
 Use from the Flask server:
     from hardware import Hardware
     hw = Hardware()                    # auto-finds the Arduino
-    hw.get_events()  -> [{"type": "button"}, {"type": "fall"}, {"type": "dark"}, ...]
+    hw.get_events()  -> [{"type": "button"}, {"type": "fall_pending", "seconds": 30},
+                         {"type": "fall"} (alarm), {"type": "cancel"}, {"type": "dark"}, ...]
+    hw.set_fall_detection(True/False), hw.cancel_fall()
                         also "disconnected" / "reconnected" (auto-reconnects if unplugged)
     hw.light         -> latest light reading (0-1023, low = dark) or None
     hw.set_lcd("Low vision", "Thanks for help")
@@ -40,6 +42,7 @@ class Hardware:
         self.light = None
         self.connected = True
         self._lcd_lines = None       # re-sent after a reconnect
+        self.fall_detection = True   # Arduino default; re-sent after a reconnect
         self._events = queue.Queue()
         self._write_lock = threading.Lock()
         self._last_dark_alert = 0.0
@@ -97,6 +100,8 @@ class Hardware:
                 self._push({"type": "reconnected"})
                 if self._lcd_lines:
                     self.set_lcd(*self._lcd_lines)  # restore the user's message
+                if not self.fall_detection:
+                    self.set_fall_detection(False)  # board resets to ON
                 return
             except Exception as e:
                 print(f"[hardware] waiting for Arduino... ({e})")
@@ -104,8 +109,16 @@ class Hardware:
     def _handle_line(self, line):
         if line == "BTN":
             self._push({"type": "button"})
-        elif line == "FALL":
+        elif line.startswith("FALL_PENDING"):
+            try:
+                seconds = int(line.split(":", 1)[1])
+            except (IndexError, ValueError):
+                seconds = 30
+            self._push({"type": "fall_pending", "seconds": seconds})
+        elif line == "FALL":  # countdown ran out: full alarm
             self._push({"type": "fall"})
+        elif line in ("FALLDET:ON", "FALLDET:OFF"):
+            self.fall_detection = line.endswith("ON")
         elif line == "CANCEL":
             self._push({"type": "cancel"})
         elif line.startswith("LIGHT:"):
@@ -159,6 +172,10 @@ class Hardware:
 
     def test_fall(self):
         self.send("TESTFALL")
+
+    def set_fall_detection(self, on):
+        self.fall_detection = bool(on)
+        return self.send("FALLDET:ON" if on else "FALLDET:OFF")
 
     def cancel_fall(self):
         """Phone's "I'm okay" - Arduino stops the alarm and replies CANCEL."""

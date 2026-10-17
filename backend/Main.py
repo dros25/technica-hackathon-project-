@@ -11,6 +11,7 @@ Run:   cd backend && python Main.py
 
 import base64
 import os
+import threading
 import time
 
 from dotenv import load_dotenv
@@ -72,10 +73,14 @@ class MockHardware:
     """Same interface as hardware.Hardware, for testing without the Arduino."""
     is_mock = True
 
+    COUNTDOWN_S = int(os.getenv("MOCK_COUNTDOWN", "30"))
+
     def __init__(self):
         self.light = 600
         self.connected = True
+        self.fall_detection = True
         self._events = []
+        self._alarm_timer = None
 
     def get_events(self):
         evs, self._events = self._events, []
@@ -96,10 +101,30 @@ class MockHardware:
         print(f"[ALARM MOCK] {'ON' if on else 'OFF'}")
 
     def test_fall(self):
-        self.inject("fall")
+        """Same flow as the Arduino: countdown first, alarm if nobody cancels."""
+        if not self.fall_detection:
+            print("[MOCK] fall ignored: fall detection is off")
+            return
+        self._stop_timer()
+        self._events.append({"type": "fall_pending", "seconds": self.COUNTDOWN_S, "time": time.time()})
+        self._alarm_timer = threading.Timer(self.COUNTDOWN_S, lambda: self.inject("fall"))
+        self._alarm_timer.daemon = True
+        self._alarm_timer.start()
 
     def cancel_fall(self):
+        self._stop_timer()
         self.inject("cancel")
+
+    def set_fall_detection(self, on):
+        self.fall_detection = bool(on)
+        if not on:
+            self._stop_timer()
+        print(f"[MOCK] fall detection {'ON' if on else 'OFF'}")
+
+    def _stop_timer(self):
+        if self._alarm_timer:
+            self._alarm_timer.cancel()
+            self._alarm_timer = None
 
 
 def load_hardware():
@@ -244,7 +269,15 @@ def events():
         "light": hw.light,
         "connected": getattr(hw, "connected", True),
         "mock": getattr(hw, "is_mock", False),
+        "fall_detection": getattr(hw, "fall_detection", True),
     })
+
+
+@app.route("/fall-detection", methods=["POST"])
+def fall_detection():
+    on = bool((request.get_json(silent=True) or {}).get("enabled", True))
+    hw.set_fall_detection(on)
+    return jsonify({"status": "success", "enabled": on})
 
 
 @app.route("/lcd", methods=["POST"])
@@ -273,10 +306,12 @@ def test_event(event_type):
     """Fake events for testing the frontend: /test/fall, /test/button, /test/cancel, /test/dark"""
     if event_type not in ("fall", "button", "cancel", "dark"):
         return jsonify({"error": "use fall, button, cancel or dark"}), 400
-    if getattr(hw, "is_mock", False):
+    if event_type == "fall":
+        hw.test_fall()  # starts the 30 s countdown (real Arduino or mock), alarm if not cancelled
+    elif event_type == "cancel":
+        hw.cancel_fall()
+    elif getattr(hw, "is_mock", False):
         hw.inject(event_type)
-    elif event_type == "fall":
-        hw.test_fall()  # real Arduino: LCD + buzzer go off, FALL event comes back
     else:
         return jsonify({"error": "with real hardware only /test/fall works - press the real button"}), 400
     return jsonify({"status": "sent", "event": event_type})
