@@ -27,14 +27,15 @@ const int LIGHT_PIN  = A0;
 
 // ---------- Tunables (adjust after testing) ----------
 const float IMPACT_G            = 2.5;   // spike that counts as a hit
-const float IMPACT_G_MMA        = 1.8;   // same, for the low-range MMA7660
-const float STILL_TOLERANCE_G   = 0.25;  // |mag - 1g| below this = "still"
-const unsigned long STILL_MS    = 2000;  // must be still this long after impact
+const float IMPACT_G_MMA        = 2.2;   // same, for the low-range MMA7660 (max ~2.6)
+const float STILL_TOLERANCE_G   = 0.15;  // |mag - 1g| below this = "still"
+const unsigned long STILL_MS    = 3000;  // must lie still this long after impact
 const unsigned long IMPACT_TIMEOUT_MS = 6000; // give up if no stillness by then
 const int DARK_LEVEL = 150;  // below this = dark (check real readings and adjust)
 
-const float FREEFALL_G          = 0.4;   // falling bodies read near 0g
-const unsigned long FREEFALL_MS = 60;    // free-fall must last this long
+const float FREEFALL_G          = 0.35;  // falling bodies read near 0g
+const unsigned long FREEFALL_MS = 120;   // free-fall must last this long (~7 cm drop)
+const unsigned long REARM_MS    = 4000;  // ignore motion right after a cancel
 
 // ---------- Accelerometer (auto-detects the common Grove versions) ----------
 enum AccelType { ACC_NONE, ACC_ADXL345, ACC_LIS3DH, ACC_MMA7660 };
@@ -51,6 +52,7 @@ enum Mode { NORMAL, IMPACT, FALLEN };
 Mode mode = NORMAL;
 unsigned long impactTime = 0;
 unsigned long stillStart = 0;
+unsigned long lastCancel = 0;
 
 bool laptopAlarm = false;
 
@@ -214,6 +216,7 @@ void triggerFall() {
 void cancelFall() {
   mode = NORMAL;
   stillStart = 0;
+  lastCancel = millis();  // picking the device back up shouldn't re-trigger
   digitalWrite(BUZZER_PIN, LOW);
   beepOn = false;
   Serial.println("CANCEL");
@@ -230,6 +233,7 @@ void updateFall(unsigned long now) {
   if (streamMag) { Serial.print("MAG:"); Serial.println(mag, 2); }
 
   if (mode == NORMAL) {
+    if (now - lastCancel < REARM_MS) return;
     // A fall shows up as free-fall (near 0g) and/or a hard impact spike.
     // The free-fall check matters for the small +/-1.5g MMA7660, which can't see big spikes.
     bool freefall = false;
