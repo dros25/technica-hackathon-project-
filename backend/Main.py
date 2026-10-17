@@ -7,9 +7,13 @@ Run:   cd backend && python Main.py
        OPENROUTER_API_KEY=...    (optional fallback if Gemini fails)
        MOCK_HARDWARE=1           (optional - force mock mode even with the Arduino plugged in)
        ARDUINO_PORT=COM3         (optional - only if auto-detect picks the wrong port)
+       MOCK_VISION=1             (optional - fake descriptions, uses no API quota)
+       GEMINI_MODELS=a,b         (optional - exact model fallback order)
+       OPENROUTER_MODEL=...      (optional - backup model on OpenRouter)
 """
 
 import base64
+import re
 import os
 import threading
 import time
@@ -145,28 +149,83 @@ hw = load_hardware()
 
 
 # ---------- AI helpers ----------
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-3.8-flash")
+MOCK_VISION = os.getenv("MOCK_VISION") == "1"  # fake descriptions: test without using API quota
+
+# Each Gemini model has its own free-tier quota. When one runs out, try the others.
+_exhausted_until = {}   # model name -> time when we may try it again
+_model_chain = None
+
+
+def _gemini_models():
+    """GEMINI_MODELS=a,b,c in .env wins; otherwise GEMINI_MODEL plus other flash models on the account."""
+    global _model_chain
+    if _model_chain is not None:
+        return _model_chain
+    if os.getenv("GEMINI_MODELS"):
+        _model_chain = [m.strip() for m in os.getenv("GEMINI_MODELS").split(",") if m.strip()]
+        return _model_chain
+    chain = [GEMINI_MODEL]
+    try:
+        skip = ("tts", "image", "live", "audio", "embed", "thinking", "exp", "preview")
+        for m in gemini_client.models.list():
+            name = (m.name or "").replace("models/", "")
+            actions = getattr(m, "supported_actions", None) or []
+            if "flash" in name and not any(s in name for s in skip) \
+                    and (not actions or "generateContent" in actions) and name not in chain:
+                chain.append(name)
+    except Exception as e:
+        print(f"[ai] couldn't list Gemini models ({e}), using {GEMINI_MODEL} only")
+    _model_chain = chain
+    print(f"[ai] Gemini model order: {', '.join(chain)}")
+    return chain
+
+
+def _retry_seconds(err_text):
+    m = re.search(r"retryDelay['\"]?\s*:\s*['\"](\d+)s", err_text) or re.search(r"retry in (\d+)", err_text)
+    return int(m.group(1)) if m else 600
+
+
 def describe_image(image_bytes, mime="image/jpeg", prompt=NARRATE_PROMPT):
-    """Gemini first (for the MLH prize), OpenRouter as a backup."""
+    """Gemini first (for the MLH prize), falling through models on quota limits, then OpenRouter."""
+    if MOCK_VISION:
+        if "NOTHING" in prompt:  # live mode: usually quiet
+            return ("NOTHING" if int(time.time()) % 3 else "A person is walking toward you on the right."), "mock"
+        return "Mock description: a clear hallway ahead, with a chair on your left.", "mock"
+
     errors = []
     if gemini_client:
-        try:
-            resp = gemini_client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=[genai_types.Part.from_bytes(data=image_bytes, mime_type=mime),
-                          prompt],
-            )
-            if resp.text:
-                return resp.text.strip(), "gemini"
-            errors.append("gemini: empty response")
-        except Exception as e:
-            errors.append(f"gemini: {e}")
-            print(f"[narrate] Gemini failed: {e}")
+        for model in _gemini_models():
+            if time.time() < _exhausted_until.get(model, 0):
+                errors.append(f"{model}: out of quota")  # don't waste a call
+                continue
+            try:
+                resp = gemini_client.models.generate_content(
+                    model=model,
+                    contents=[genai_types.Part.from_bytes(data=image_bytes, mime_type=mime), prompt],
+                )
+                if resp.text:
+                    return resp.text.strip(), f"gemini:{model}"
+                errors.append(f"{model}: empty response")
+            except Exception as e:
+                text = str(e)
+                if "429" in text or "RESOURCE_EXHAUSTED" in text:
+                    wait = _retry_seconds(text)
+                    _exhausted_until[model] = time.time() + wait
+                    print(f"[narrate] {model} is out of quota for ~{wait // 60} min, trying the next model")
+                    errors.append(f"{model}: out of quota")
+                elif "404" in text or "NOT_FOUND" in text:
+                    _exhausted_until[model] = time.time() + 24 * 3600  # retired model, skip it
+                    errors.append(f"{model}: not available")
+                else:
+                    print(f"[narrate] {model} failed: {text[:300]}")
+                    errors.append(f"{model}: {text[:120]}")
 
     if openrouter_client:
         try:
             b64 = base64.b64encode(image_bytes).decode()
             resp = openrouter_client.chat.completions.create(
-                model="google/gemini-2.5-flash",
+                model=OPENROUTER_MODEL,
                 messages=[{"role": "user", "content": [
                     {"type": "text", "text": prompt},
                     {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
@@ -177,6 +236,9 @@ def describe_image(image_bytes, mime="image/jpeg", prompt=NARRATE_PROMPT):
             errors.append(f"openrouter: {e}")
             print(f"[narrate] OpenRouter failed: {e}")
 
+    if errors and all("out of quota" in e or "not available" in e for e in errors):
+        raise RuntimeError("The AI's free daily limit is used up. Add billing or another API key. ("
+                           + "; ".join(errors) + ")")
     raise RuntimeError("No vision model worked: " + "; ".join(errors or ["no API keys set"]))
 
 

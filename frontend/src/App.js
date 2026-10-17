@@ -206,7 +206,9 @@ export default function App() {
     } catch (err) {
       console.error(err);
       if (kind === 'tap') {
-        const msg = "Couldn't describe the scene. Check the connection and try again.";
+        const msg = /daily limit/i.test(err.message || '')
+          ? 'The scene describer has reached its daily limit.'
+          : "Couldn't describe the scene. Check the connection and try again.";
         setCaption(`${msg} (${err.message || 'no details'})`); // details on screen help debugging
         speak(msg);
       }
