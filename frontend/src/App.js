@@ -357,7 +357,7 @@ export default function App() {
       hazardHandlersRef.current.draw(null);
       speak('Hazard watch off.');
     }
-  }, [cameraReady, hazardOn]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cameraReady, hazardOn]); // sensitivity is applied by its own effect
 
   useEffect(() => () => { if (watcherRef.current) watcherRef.current.stop(); }, []);
 
