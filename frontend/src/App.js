@@ -291,8 +291,7 @@ export default function App() {
     const prev = hazardStateRef.current;
     hazardStateRef.current = state;
     setHazardState(state);
-    if (state === 'on' && prev === 'loading') speak('Hazard watch on.');
-    else if (state === 'on' && prev === 'stalled') speak('Hazard watch resumed.');
+    if (state === 'on' && prev === 'stalled') speak('Hazard watch resumed.');
     else if (state === 'stalled') {
       setCaption('Hazard watch paused: the camera stopped.');
       speak('Warning. Hazard watch paused. The camera stopped.', 'urgent');
@@ -338,6 +337,7 @@ export default function App() {
     }
   };
 
+  // Hazard watch runs only in Live guide (and only if it's enabled in Settings)
   useEffect(() => {
     if (!cameraReady || !videoRef.current) return;
     if (!watcherRef.current) {
@@ -350,20 +350,19 @@ export default function App() {
       });
       watcherRef.current.setSensitivity(SENSITIVITY[sensitivity] || 1);
     }
-    if (hazardOn) {
+    if (mode === 'live' && hazardOn) {
       watcherRef.current.start();
     } else if (hazardStateRef.current !== 'off') {
       watcherRef.current.stop();
       hazardHandlersRef.current.draw(null);
-      speak('Hazard watch off.');
     }
-  }, [cameraReady, hazardOn]); // sensitivity is applied by its own effect
+  }, [cameraReady, hazardOn, mode]); // sensitivity is applied by its own effect
 
   useEffect(() => () => { if (watcherRef.current) watcherRef.current.stop(); }, []);
 
   // Keep the screen awake: if the phone sleeps, the camera stops and so does the watcher
   useEffect(() => {
-    if (!(hazardOn || mode === 'live') || !('wakeLock' in navigator)) return undefined;
+    if (mode !== 'live' || !('wakeLock' in navigator)) return undefined;
     let lock = null;
     let cancelled = false;
     const acquire = async () => {
@@ -382,7 +381,7 @@ export default function App() {
       document.removeEventListener('visibilitychange', onVisible);
       if (lock) lock.release().catch(() => {});
     };
-  }, [hazardOn, mode]);
+  }, [mode]);
 
   // ---------- Live guide ----------
   useEffect(() => {
@@ -407,7 +406,9 @@ export default function App() {
     if (next === mode) return;
     setMode(next);
     const msg = next === 'live'
-      ? "Live guide on. I'll speak when something new appears."
+      ? (hazardOn
+        ? "Live guide on. I'll warn you if something comes at you fast, and speak when something new appears."
+        : "Live guide on. I'll speak when something new appears.")
       : 'Tap mode on. Tap the porthole or press your button to hear what is ahead.';
     setCaption(msg);
     speak(msg);
@@ -547,7 +548,7 @@ export default function App() {
           : { text: 'Online, wearable connected', tone: 'ok' };
 
   const hazardPill = {
-    off: { text: 'Hazard watch off', tone: 'quiet' },
+    off: { text: hazardOn && mode !== 'live' ? 'Hazard watch: Live guide only' : 'Hazard watch off', tone: 'quiet' },
     loading: { text: 'Hazard watch starting', tone: 'quiet' },
     on: { text: hazardStats ? `Hazard watch on · ${hazardStats.latencyMs} ms` : 'Hazard watch on', tone: 'ok' },
     stalled: { text: 'Hazard watch paused', tone: 'alert' },
@@ -631,9 +632,14 @@ export default function App() {
         <details className="settings">
           <summary {...hover('Settings')}>Settings</summary>
 
-          <label className="toggle" {...hover(`Hazard watch. Warn me when something comes at me fast. ${hazardOn ? 'On' : 'Off'}`)}>
-            <input type="checkbox" checked={hazardOn} onChange={(e) => setHazardOn(e.target.checked)} />
-            <span>Hazard watch: warn me when something comes at me fast</span>
+          <label className="toggle" {...hover(`Hazard watch in Live guide. Warn me when something comes at me fast. ${hazardOn ? 'On' : 'Off'}`)}>
+            <input type="checkbox" checked={hazardOn} onChange={(e) => {
+              setHazardOn(e.target.checked);
+              const msg = e.target.checked ? 'Hazard warnings on in Live guide.' : 'Hazard warnings off.';
+              setCaption(msg);
+              speak(msg);
+            }} />
+            <span>Hazard watch (Live guide): warn me when something comes at me fast</span>
           </label>
 
           <fieldset className="display-fields">
