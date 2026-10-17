@@ -31,7 +31,7 @@ const float IMPACT_G_MMA        = 1.8;   // same, for the low-range MMA7660
 const float STILL_TOLERANCE_G   = 0.25;  // |mag - 1g| below this = "still"
 const unsigned long STILL_MS    = 2000;  // must be still this long after impact
 const unsigned long IMPACT_TIMEOUT_MS = 6000; // give up if no stillness by then
-const int DARK_LEVEL = 250;  // below this = dark (check real readings and adjust)
+const int DARK_LEVEL = 150;  // below this = dark (check real readings and adjust)
 
 const float FREEFALL_G          = 0.4;   // falling bodies read near 0g
 const unsigned long FREEFALL_MS = 60;    // free-fall must last this long

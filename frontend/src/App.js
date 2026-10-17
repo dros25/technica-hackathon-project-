@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import './App.css'; // Optional styling if you have it
+
+// Same-origin by default: Flask serves the built app, so one ngrok https link works for everything.
+// During `npm start`, package.json "proxy" forwards these calls to Flask on port 5000.
+const API = process.env.REACT_APP_API_URL || '';
 
 function App() {
   const [statusText, setStatusText] = useState('System ready. Tap screen to scan surroundings.');
@@ -27,8 +30,15 @@ function App() {
 
   // 2. Fallback Speech Synthesis if ElevenLabs audio fails
   const speakFallback = (text) => {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel(); // don't queue up stale messages
     const utterance = new SpeechSynthesisUtterance(text);
     window.speechSynthesis.speak(utterance);
+  };
+
+  const stopSpeaking = () => {
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    if (audioRef.current) audioRef.current.pause();
   };
 
   // 3. Capture Photo & Send to Flask Backend (/narrate)
@@ -36,6 +46,7 @@ function App() {
     // Unlock mobile audio on first tap
     if (!audioUnlocked.current && audioRef.current) {
       audioRef.current.play().catch(() => {});
+      if (window.speechSynthesis) window.speechSynthesis.speak(new SpeechSynthesisUtterance(''));
       audioUnlocked.current = true;
     }
     if (navigator.vibrate) navigator.vibrate(100);
@@ -43,11 +54,17 @@ function App() {
     setStatusText('Analyzing surroundings...');
 
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || !video.videoWidth) {
+      setStatusText('Camera not ready yet. Try again in a moment.');
+      speakFallback('Camera not ready yet.');
+      return;
+    }
 
+    // Shrink to 640px wide: much faster upload and AI response
+    const scale = Math.min(1, 640 / video.videoWidth);
     const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
@@ -57,7 +74,7 @@ function App() {
 
       try {
         // Change localhost to your laptop's local IP if testing from a physical phone!
-        const response = await fetch('http://172.20.10.2:5000/narrate', {
+        const response = await fetch(`${API}/narrate`, {
           method: 'POST',
           body: formData,
         });
@@ -84,14 +101,17 @@ function App() {
   // 4. Update Wearable LCD Message
   const updateLCD = async () => {
     try {
-      await fetch('http://172.20.10.2:5000/lcd', {
+      const res = await fetch(`${API}/lcd`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ line1, line2 }),
       });
-      alert('LCD updated successfully!');
+      if (!res.ok) throw new Error('bad response');
+      setStatusText('Wearable display updated.');
+      speakFallback('Wearable display updated.');
     } catch (e) {
-      alert('Failed to update LCD.');
+      setStatusText('Could not update the wearable display.');
+      speakFallback('Could not update the wearable display.');
     }
   };
 
@@ -99,7 +119,7 @@ function App() {
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const res = await fetch('http://172.20.10.2:5000/events');
+        const res = await fetch(`${API}/events`);
         const data = await res.json();
         setConnectionStatus('Online');
 
@@ -111,11 +131,18 @@ function App() {
               setStatusText('🚨 FALL DETECTED! Press button if safe.');
               speakFallback('Fall detected. Press the button if you are okay.');
             } else if (ev.type === 'cancel') {
+              stopSpeaking();
               setStatusText("Fall alert cancelled. You're safe.");
               speakFallback("Okay, glad you're safe.");
-            } else if (ev.type === 'air_bad') {
-              setStatusText('⚠️ Bad air quality detected!');
-              speakFallback('Warning: Poor air quality detected. Please move.');
+            } else if (ev.type === 'dark') {
+              setStatusText('🌙 Low light detected. Take extra care.');
+              speakFallback("It's getting dark around you. Take extra care.");
+            } else if (ev.type === 'disconnected') {
+              setStatusText('⚠️ Wearable disconnected. Trying to reconnect.');
+              speakFallback('Wearable disconnected.');
+            } else if (ev.type === 'reconnected') {
+              setStatusText('Wearable reconnected.');
+              speakFallback('Wearable reconnected.');
             }
           });
         }
@@ -145,15 +172,16 @@ function App() {
         </header>
 
         {/* Giant Accessibility Button */}
-        <button 
+        <button
           onClick={captureAndNarrate}
+          aria-label="Tap to describe what is in front of you"
           style={{ flexGrow: 1, background: '#00ff66', color: '#000', border: 'none', borderRadius: '20px', fontSize: '2.5rem', fontWeight: 'bold', margin: '20px 0', cursor: 'pointer', boxShadow: '0 0 20px rgba(0,255,102,0.5)' }}
         >
           TAP TO DESCRIBE
         </button>
 
         {/* Status Box */}
-        <div style={{ background: 'rgba(255,255,255,0.1)', padding: '15px', borderRadius: '10px', fontSize: '1.2rem', minHeight: '60px' }}>
+        <div role="status" aria-live="polite" style={{ background: 'rgba(255,255,255,0.1)', padding: '15px', borderRadius: '10px', fontSize: '1.2rem', minHeight: '60px' }}>
           {statusText}
         </div>
 
