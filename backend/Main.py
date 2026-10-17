@@ -10,16 +10,19 @@ Run:   cd backend && python Main.py
        MOCK_VISION=1             (optional - fake descriptions, uses no API quota)
        GEMINI_MODELS=a,b         (optional - exact model fallback order)
        OPENROUTER_MODEL=...      (optional - backup model on OpenRouter)
+       CAMERA_INDEX=1            (optional - which webcam is the wearable; default tries 1, 2, then 0)
+       ELEVEN_VOICE_ID=...       (optional - default voice; the phone can pick another)
 """
 
 import base64
+import hashlib
 import re
 import os
 import threading
 import time
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
 
 load_dotenv()
@@ -147,6 +150,9 @@ def load_hardware():
 
 hw = load_hardware()
 
+from camera import Webcam, difference as camera_difference  # noqa: E402  (backend/camera.py)
+webcam = Webcam()  # the wearable's USB webcam; opens the first time it's used
+
 
 # ---------- AI helpers ----------
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-3.8-flash")
@@ -242,21 +248,91 @@ def describe_image(image_bytes, mime="image/jpeg", prompt=NARRATE_PROMPT):
     raise RuntimeError("No vision model worked: " + "; ".join(errors or ["no API keys set"]))
 
 
-def speak(text):
+# Every phrase is saved the first time it's spoken, so repeated hover labels and alerts
+# cost no ElevenLabs credits (and survive restarts).
+TTS_CACHE_DIR = os.path.join(BASE_DIR, ".tts_cache")
+_tts_memory = {}
+_voice_ids = set()  # voices the account actually has (filled by list_voices)
+
+
+def _clean_voice(voice_id):
+    if voice_id and re.fullmatch(r"[A-Za-z0-9]{10,40}", str(voice_id)) \
+            and (not _voice_ids or voice_id in _voice_ids):
+        return voice_id
+    return ELEVEN_VOICE_ID
+
+
+def speak(text, voice_id=None):
     """Returns base64 mp3, or None so the phone falls back to its built-in voice."""
     if not eleven_client or not text:
         return None
+    voice_id = _clean_voice(voice_id)
+    key = hashlib.sha1(f"{voice_id}|{ELEVEN_MODEL}|{text}".encode()).hexdigest()
+    if key in _tts_memory:
+        return _tts_memory[key]
+    path = os.path.join(TTS_CACHE_DIR, key + ".mp3")
+    if os.path.exists(path):
+        with open(path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+        _tts_memory[key] = b64
+        return b64
     try:
-        audio = eleven_client.text_to_speech.convert(
-            voice_id=ELEVEN_VOICE_ID,
+        audio = b"".join(eleven_client.text_to_speech.convert(
+            voice_id=voice_id,
             model_id=ELEVEN_MODEL,
             output_format="mp3_44100_128",
             text=text,
-        )
-        return base64.b64encode(b"".join(audio)).decode()
+        ))
     except Exception as e:
         print(f"[speak] ElevenLabs failed, phone will use built-in voice: {e}")
         return None
+    try:
+        os.makedirs(TTS_CACHE_DIR, exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(audio)
+    except OSError:
+        pass
+    b64 = base64.b64encode(audio).decode()
+    if len(_tts_memory) < 500:
+        _tts_memory[key] = b64
+    return b64
+
+
+_voices_cache = {"at": 0.0, "list": []}
+
+
+def list_voices():
+    """The ElevenLabs voices this account can use, for the voice picker."""
+    if not eleven_client:
+        return []
+    if time.time() - _voices_cache["at"] < 600 and _voices_cache["list"]:
+        return _voices_cache["list"]
+    try:
+        try:
+            raw = eleven_client.voices.search(page_size=100).voices
+        except Exception:
+            raw = eleven_client.voices.get_all().voices
+    except Exception as e:
+        print(f"[voices] couldn't list ElevenLabs voices: {e}")
+        return _voices_cache["list"]
+    out = []
+    for v in raw:
+        labels = dict(getattr(v, "labels", None) or {})
+        out.append({
+            "voice_id": v.voice_id,
+            "name": v.name,
+            "gender": labels.get("gender", ""),
+            "accent": labels.get("accent", ""),
+            "age": labels.get("age", ""),
+            "description": labels.get("description") or labels.get("descriptive") or "",
+            "preview_url": getattr(v, "preview_url", None),
+            "category": str(getattr(v, "category", "") or ""),
+        })
+    out.sort(key=lambda v: (v["category"] != "premade", v["name"].lower()))
+    _voices_cache.update(at=time.time(), list=out)
+    _voice_ids.clear()
+    _voice_ids.update(v["voice_id"] for v in out)
+    return out
 
 
 # ---------- App ----------
@@ -284,24 +360,48 @@ def health():
     })
 
 
+LIVE_CHANGE = 12        # average pixel change (0-255) that counts as "the scene changed"
+LIVE_RECHECK_S = 20     # re-check an unchanged scene this often anyway
+_wearable_live = {"sig": None, "at": 0.0}
+
+
 @app.route("/narrate", methods=["POST"])
 def narrate():
-    image = request.files.get("image")
-    if image is None:
-        return jsonify({"error": "no 'image' file in form data"}), 400
-    image_bytes = image.read()
-    if not image_bytes:
-        return jsonify({"error": "empty image"}), 400
+    mode = request.form.get("mode", "tap")
+    voice_id = request.form.get("voice_id") or None
+
+    if request.form.get("source") == "wearable":
+        # The wearable's USB webcam is plugged into this laptop: grab the frame here
+        if mode == "live":
+            sig = webcam.signature()
+            if sig is None:
+                return jsonify({"error": webcam.error or "Wearable camera not available"}), 503
+            changed = camera_difference(sig, _wearable_live["sig"]) > LIVE_CHANGE
+            stale = time.time() - _wearable_live["at"] > LIVE_RECHECK_S
+            if not changed and not stale:
+                return jsonify({"text": "", "audio": None, "quiet": True, "source": "unchanged"})
+            _wearable_live["sig"], _wearable_live["at"] = sig, time.time()
+        image_bytes = webcam.jpeg(width=640)
+        if image_bytes is None:
+            return jsonify({"error": webcam.error or "Wearable camera not available"}), 503
+        mime = "image/jpeg"
+    else:
+        image = request.files.get("image")
+        if image is None:
+            return jsonify({"error": "no 'image' file in form data"}), 400
+        image_bytes = image.read()
+        if not image_bytes:
+            return jsonify({"error": "empty image"}), 400
+        mime = image.mimetype or "image/jpeg"
 
     try:
         start = time.time()
-        mode = request.form.get("mode", "tap")
         if mode == "live":
             previous = request.form.get("previous", "").strip()[:300] or "nothing yet"
             prompt = LIVE_PROMPT.format(previous=previous.replace('"', "'"))
         else:
             prompt = NARRATE_PROMPT
-        text, source = describe_image(image_bytes, image.mimetype or "image/jpeg", prompt)
+        text, source = describe_image(image_bytes, mime, prompt)
         print(f"[narrate] {source} in {time.time() - start:.1f}s: {text}")
     except Exception as e:
         return jsonify({"error": str(e)}), 502
@@ -313,15 +413,53 @@ def narrate():
 
     # voice=device -> the phone speaks it itself (instant, saves ElevenLabs credits; used by live mode)
     want_audio = request.form.get("voice", "eleven") == "eleven"
-    return jsonify({"text": text, "audio": speak(text) if want_audio else None, "source": source})
+    audio = speak(text, voice_id) if want_audio else None
+    return jsonify({"text": text, "audio": audio, "source": source})
 
 
 @app.route("/speak", methods=["POST"])
 def speak_route():
-    text = (request.get_json(silent=True) or {}).get("text", "").strip()
+    data = request.get_json(silent=True) or {}
+    text = str(data.get("text", "")).strip()[:400]
     if not text:
         return jsonify({"error": "no text"}), 400
-    return jsonify({"text": text, "audio": speak(text)})
+    return jsonify({"text": text, "audio": speak(text, data.get("voice_id"))})
+
+
+@app.route("/voices", methods=["GET"])
+def voices():
+    return jsonify({"voices": list_voices(), "default": ELEVEN_VOICE_ID})
+
+
+# ---------- Wearable webcam ----------
+@app.route("/camera/status")
+def camera_status():
+    webcam.open()
+    return jsonify(webcam.status())
+
+
+@app.route("/camera/frame.jpg")
+def camera_frame():
+    jpg = webcam.jpeg(width=640)
+    if jpg is None:
+        return jsonify({"error": webcam.error or "no camera"}), 503
+    return Response(jpg, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.route("/camera/stream")
+def camera_stream():
+    """Live view for the porthole (MJPEG, ~6 fps, small so it stays smooth over ngrok)."""
+    def frames():
+        while True:
+            jpg = webcam.jpeg(width=480, quality=60)
+            if jpg is None:
+                return
+            yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
+            time.sleep(0.16)
+    if not webcam.open():
+        return jsonify({"error": webcam.error or "no camera"}), 503
+    return Response(frames(), mimetype="multipart/x-mixed-replace; boundary=frame",
+                    headers={"Cache-Control": "no-store"})
 
 
 @app.route("/events", methods=["GET"])

@@ -19,6 +19,16 @@ const LIVE_RECHECK_MS = 20000;   // re-check even an unchanged scene this often
 const HOVER_REPEAT_MS = 1500;    // don't repeat the same hover label too quickly
 const QUIET_AFTER_HAZARD_MS = 3000; // live narration waits this long after a hazard alert
 
+// Spoken the moment something happens, so they're generated ahead of time in the chosen voice
+const HAZARD_NAMES = ['Car', 'Bus', 'Truck', 'Motorbike', 'Bike', 'Person', 'Dog'];
+const ALERT_PHRASES = [
+  "Fall detected. The alarm will sound in 30 seconds. Double-click your button, or tap I'm okay, to cancel.",
+  "Alarm on. Asking people nearby for help. Double-click your button, or tap I'm okay, to stop it.",
+  '20 seconds.', '10 seconds.', '5 seconds.',
+  "Okay, glad you're safe.",
+  ...HAZARD_NAMES.flatMap((n) => [`${n} ahead!`, `${n}, left!`, `${n}, right!`]),
+];
+
 function loadSetting(key, fallback) {
   try {
     const v = localStorage.getItem('guardian.' + key);
@@ -74,6 +84,10 @@ export default function App() {
   const [hazardOn, setHazardOn] = useState(() => loadSetting('hazardOn', true));
   const [sensitivity, setSensitivity] = useState(() => loadSetting('sensitivity', 'normal'));
   const [showBoxes, setShowBoxes] = useState(() => loadSetting('showBoxes', true));
+  const [voices, setVoices] = useState([]);
+  const [voiceId, setVoiceId] = useState(() => loadSetting('voiceId', ''));
+  const [cameraSource, setCameraSource] = useState(() => loadSetting('cameraSource', 'phone')); // phone | wearable
+  const [wearableCam, setWearableCam] = useState(null); // /camera/status result
   const [hazardState, setHazardState] = useState('off'); // off | loading | on | stalled | error
   const [hazardStats, setHazardStats] = useState(null);  // { latencyMs, fps }
 
@@ -93,6 +107,10 @@ export default function App() {
   const premiumRef = useRef(premiumVoice);
   const cameraMsgRef = useRef('The camera is starting. Try again in a moment.');
   const speechRef = useRef({ id: 0, priority: null });
+  const voiceRef = useRef(voiceId);
+  const ttsRef = useRef(new Map());      // "voice|text" -> Promise<audio URL>
+  const ttsReadyRef = useRef(new Set()); // keys whose audio is already downloaded
+  const cameraSourceRef = useRef(cameraSource);
   const lastHoverRef = useRef({ text: '', at: 0 });
   const liveRef = useRef({ text: '', at: 0, sig: null });
 
@@ -107,41 +125,150 @@ export default function App() {
   }, [sensitivity]);
 
   // ---------- Speech ----------
-  // "urgent" = hazard warnings (interrupt everything, nothing interrupts them).
+  // Priorities: "urgent" = hazard warnings (interrupt everything, nothing interrupts them).
   // "high" = narration and alerts. "low" = hover labels (never interrupts high or urgent).
+  // With the natural voice on, every phrase is spoken by ElevenLabs and cached (here and on
+  // the server), so repeated labels and alerts cost nothing after the first time.
+  // speechRef.priority stays set while a phrase is loading or playing.
   const isPlayingAudio = () => audioRef.current && !audioRef.current.paused;
-  const urgentSpeaking = () => window.speechSynthesis && window.speechSynthesis.speaking
-    && speechRef.current.priority === 'urgent';
+  const urgentSpeaking = () => speechRef.current.priority === 'urgent';
 
-  const speak = useCallback((text, priority = 'high') => {
+  const b64ToUrl = (b64) => {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return URL.createObjectURL(new Blob([bytes], { type: 'audio/mpeg' }));
+  };
+
+  // Natural-voice audio for a phrase: Promise<objectURL>, cached per voice + text
+  const naturalAudio = useCallback((text) => {
+    const key = `${voiceRef.current}|${text}`;
+    const cache = ttsRef.current;
+    if (!cache.has(key)) {
+      const p = api('/speak', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, voice_id: voiceRef.current }),
+      })
+        .then((r) => r.json())
+        .then((d) => {
+          if (!d.audio) throw new Error('no audio');
+          const url = b64ToUrl(d.audio);
+          ttsReadyRef.current.add(key);
+          return url;
+        })
+        .catch((e) => { cache.delete(key); throw e; });
+      cache.set(key, p);
+    }
+    return cache.get(key);
+  }, []);
+
+  const stopAll = () => {
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    if (audioRef.current) audioRef.current.pause();
+  };
+
+  const deviceSay = (text, priority, id) => {
     const synth = window.speechSynthesis;
-    if (!text || !synth) return;
-    const s = speechRef.current;
-    if (priority === 'low' && (isPlayingAudio() || (synth.speaking && s.priority !== 'low'))) return;
-    if (priority === 'high' && urgentSpeaking()) return; // never talk over a hazard warning
-    if (priority !== 'low' && audioRef.current) audioRef.current.pause();
-    synth.cancel();
-    const id = ++s.id;
-    s.priority = priority;
+    if (!synth) { if (speechRef.current.id === id) speechRef.current.priority = null; return; }
     const u = new SpeechSynthesisUtterance(text);
     u.rate = priority === 'urgent' ? 1.25 : 1.05;
     u.onend = () => { if (speechRef.current.id === id) speechRef.current.priority = null; };
     synth.speak(u);
-  }, []);
+  };
 
-  const playAudio = useCallback((b64, fallbackText) => {
+  const playUrl = (url, text, priority, id) => {
     const audio = audioRef.current;
-    if (!audio) return speak(fallbackText);
-    if (urgentSpeaking()) return; // a hazard warning is playing; the caption still shows the text
-    if (window.speechSynthesis) window.speechSynthesis.cancel();
-    audio.src = `data:audio/mpeg;base64,${b64}`;
-    audio.play().catch(() => speak(fallbackText));
-  }, [speak]);
+    if (!audio) return deviceSay(text, priority, id);
+    audio.onended = () => { if (speechRef.current.id === id) speechRef.current.priority = null; };
+    audio.src = url;
+    audio.playbackRate = priority === 'urgent' ? 1.15 : 1;
+    audio.play().catch(() => { if (speechRef.current.id === id) deviceSay(text, priority, id); });
+  };
+
+  const speak = useCallback((text, priority = 'high') => {
+    if (!text) return;
+    const s = speechRef.current;
+    if (priority === 'low' && s.priority && s.priority !== 'low') return;
+    if (priority === 'high' && s.priority === 'urgent') return; // never talk over a hazard warning
+    stopAll();
+    const id = ++s.id;
+    s.priority = priority;
+    if (!premiumRef.current) return deviceSay(text, priority, id);
+
+    const key = `${voiceRef.current}|${text}`;
+    // Hazard warnings can't wait for the network: natural voice only if it's already cached
+    if (priority === 'urgent' && !ttsReadyRef.current.has(key)) {
+      naturalAudio(text).catch(() => {}); // ready for next time
+      return deviceSay(text, priority, id);
+    }
+    const waitMs = priority === 'low' ? 1500 : 4000;
+    Promise.race([
+      naturalAudio(text),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('slow')), waitMs)),
+    ])
+      .then((url) => { if (speechRef.current.id === id) playUrl(url, text, priority, id); })
+      .catch(() => {
+        if (speechRef.current.id !== id) return;
+        if (priority === 'low') speechRef.current.priority = null; // skip a slow hover label
+        else deviceSay(text, priority, id);                         // never drop an alert
+      });
+  }, [naturalAudio]);
+
+  // Narration that already came back with natural-voice audio
+  const playAudio = useCallback((b64, fallbackText) => {
+    const s = speechRef.current;
+    if (s.priority === 'urgent') return; // a hazard warning is playing; the caption still shows the text
+    stopAll();
+    const id = ++s.id;
+    s.priority = 'high';
+    playUrl(b64ToUrl(b64), fallbackText, 'high', id);
+  }, []);
 
   const stopSpeaking = useCallback(() => {
-    if (window.speechSynthesis) window.speechSynthesis.cancel();
-    if (audioRef.current) audioRef.current.pause();
+    speechRef.current.id += 1;
+    speechRef.current.priority = null;
+    stopAll();
   }, []);
+
+  // ---------- Voices ----------
+  useEffect(() => {
+    api('/voices')
+      .then((r) => r.json())
+      .then((d) => {
+        setVoices(d.voices || []);
+        if (!voiceRef.current && d.default) { voiceRef.current = d.default; setVoiceId(d.default); }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Pre-make the alerts that must play instantly, in the chosen voice
+  useEffect(() => {
+    voiceRef.current = voiceId;
+    saveSetting('voiceId', voiceId);
+    if (!voiceId || !premiumVoice) return;
+    const t = setTimeout(() => {
+      ALERT_PHRASES.forEach((p, i) => setTimeout(() => naturalAudio(p).catch(() => {}), i * 150));
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [voiceId, premiumVoice, naturalAudio]);
+
+  const previewVoice = (v) => {
+    stopSpeaking();
+    if (v && v.preview_url) {
+      // ElevenLabs' own sample clip: costs no credits
+      const a = audioRef.current;
+      a.src = v.preview_url;
+      a.play().catch(() => speak(`Hi, I'm ${v.name}.`));
+    } else if (v) {
+      speak(`Hi, I'm ${v.name}. This is how I'll sound.`);
+    }
+  };
+
+  const voiceLabel = (v) => {
+    const bits = [v.gender, v.accent, v.description].filter(Boolean).join(', ');
+    return bits ? `${v.name} (${bits})` : v.name;
+  };
 
   // Read a control's label when the mouse rests on it or keyboard focus lands on it
   const hover = useCallback((label) => {
@@ -195,8 +322,18 @@ export default function App() {
   }, []);
 
   // ---------- Camera ----------
+  // Phone camera only when it's the chosen source (the wearable webcam lives on the server)
   useEffect(() => {
     let stream;
+    let cancelled = false;
+    cameraSourceRef.current = cameraSource;
+    saveSetting('cameraSource', cameraSource);
+    if (cameraSource === 'wearable') {
+      setCameraReady(false);
+      api('/camera/status').then((r) => r.json()).then((st) => { if (!cancelled) setWearableCam(st); })
+        .catch(() => { if (!cancelled) setWearableCam({ available: false, error: 'Server not reachable' }); });
+      return () => { cancelled = true; };
+    }
     if (!window.isSecureContext || !navigator.mediaDevices) {
       cameraMsgRef.current = 'The camera needs a secure link. Open the https link for this app.';
       setCaption(cameraMsgRef.current);
@@ -208,6 +345,7 @@ export default function App() {
       audio: false,
     })
       .then((s) => {
+        if (cancelled) { s.getTracks().forEach((t) => t.stop()); return; }
         stream = s;
         if (videoRef.current) videoRef.current.srcObject = s;
         setCameraReady(true);
@@ -217,14 +355,30 @@ export default function App() {
         cameraMsgRef.current = 'Camera access was blocked. Allow camera access for this site and reload.';
         setCaption(cameraMsgRef.current);
       });
-    return () => { if (stream) stream.getTracks().forEach((t) => t.stop()); };
-  }, []);
+    return () => {
+      cancelled = true;
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+      setCameraReady(false);
+    };
+  }, [cameraSource]);
+
+  const chooseCamera = (next) => {
+    if (next === cameraSource) return;
+    setCameraSource(next);
+    const msg = next === 'wearable'
+      ? 'Using the wearable camera. Press your button to hear what is ahead.'
+      : 'Using the phone camera.';
+    setCaption(msg);
+    speak(msg);
+  };
 
   // ---------- Describe the scene ----------
   const describe = useCallback(async (kind = 'tap') => {
     if (busyRef.current) return;
-    const canvas = grabFrame(videoRef.current, 640);
-    if (!canvas) {
+    // Wearable camera: the server grabs the frame from the USB webcam plugged into it
+    const fromWearable = cameraSourceRef.current === 'wearable';
+    const canvas = fromWearable ? null : grabFrame(videoRef.current, 640);
+    if (!fromWearable && !canvas) {
       if (kind === 'tap') { setCaption(cameraMsgRef.current); speak(cameraMsgRef.current); }
       return;
     }
@@ -235,11 +389,16 @@ export default function App() {
       if (navigator.vibrate) navigator.vibrate(60);
     }
     try {
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.8));
       const form = new FormData();
-      form.append('image', blob, 'frame.jpg');
+      if (fromWearable) {
+        form.append('source', 'wearable');
+      } else {
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+        form.append('image', blob, 'frame.jpg');
+      }
       form.append('mode', kind);
-      form.append('voice', kind === 'tap' && premiumRef.current ? 'eleven' : 'device');
+      form.append('voice', premiumRef.current ? 'eleven' : 'device');
+      form.append('voice_id', voiceRef.current || '');
       if (kind === 'live' && liveRef.current.text) form.append('previous', liveRef.current.text);
 
       const res = await api('/narrate', { method: 'POST', body: form });
@@ -339,6 +498,11 @@ export default function App() {
 
   // Hazard watch runs only in Live guide (and only if it's enabled in Settings)
   useEffect(() => {
+    if (cameraSource === 'wearable') { // needs the phone camera's live video
+      if (watcherRef.current && hazardStateRef.current !== 'off') watcherRef.current.stop();
+      hazardHandlersRef.current.draw(null);
+      return;
+    }
     if (!cameraReady || !videoRef.current) return;
     if (!watcherRef.current) {
       watcherRef.current = new HazardWatcher({
@@ -356,7 +520,7 @@ export default function App() {
       watcherRef.current.stop();
       hazardHandlersRef.current.draw(null);
     }
-  }, [cameraReady, hazardOn, mode]); // sensitivity is applied by its own effect
+  }, [cameraReady, hazardOn, mode, cameraSource]); // sensitivity is applied by its own effect
 
   useEffect(() => () => { if (watcherRef.current) watcherRef.current.stop(); }, []);
 
@@ -388,9 +552,10 @@ export default function App() {
     if (mode !== 'live') return undefined;
     liveRef.current = { text: '', at: 0, sig: null };
     const timer = setInterval(() => {
-      const synth = window.speechSynthesis;
-      if (busyRef.current || fallRef.current || isPlayingAudio() || (synth && synth.speaking)) return;
+      if (busyRef.current || fallRef.current || speechRef.current.priority || isPlayingAudio()) return;
       if (Date.now() - lastHazardRef.current < QUIET_AFTER_HAZARD_MS) return;
+      // Wearable camera: the server checks whether the scene changed before calling the AI
+      if (cameraSourceRef.current === 'wearable') { describeRef.current('live'); return; }
       const sig = frameSignature(videoRef.current);
       if (!sig) return;
       const changed = frameDifference(sig, liveRef.current.sig) > LIVE_CHANGE;
@@ -548,7 +713,12 @@ export default function App() {
           : { text: 'Online, wearable connected', tone: 'ok' };
 
   const hazardPill = {
-    off: { text: hazardOn && mode !== 'live' ? 'Hazard watch: Live guide only' : 'Hazard watch off', tone: 'quiet' },
+    off: {
+      text: cameraSource === 'wearable'
+        ? 'Hazard watch: phone camera only'
+        : hazardOn && mode !== 'live' ? 'Hazard watch: Live guide only' : 'Hazard watch off',
+      tone: 'quiet',
+    },
     loading: { text: 'Hazard watch starting', tone: 'quiet' },
     on: { text: hazardStats ? `Hazard watch on · ${hazardStats.latencyMs} ms` : 'Hazard watch on', tone: 'ok' },
     stalled: { text: 'Hazard watch paused', tone: 'alert' },
@@ -585,7 +755,7 @@ export default function App() {
       <main className="stage">
         <button
           type="button"
-          className={`porthole ${busy ? 'is-busy' : ''} ${cameraReady ? 'has-camera' : ''}`}
+          className={`porthole ${busy ? 'is-busy' : ''} ${cameraReady || cameraSource === 'wearable' ? 'has-camera' : ''}`}
           onClick={() => describe('tap')}
           aria-label={portholeLabel}
           aria-busy={busy}
@@ -594,7 +764,11 @@ export default function App() {
         >
           <span className="sonar" aria-hidden="true"><i /><i /><i /></span>
           <span className="porthole-glass">
-            <video ref={videoRef} autoPlay playsInline muted aria-hidden="true" />
+            {/* The video stays mounted so the hazard watcher keeps its element */}
+            <video ref={videoRef} autoPlay playsInline muted aria-hidden="true" hidden={cameraSource === 'wearable'} />
+            {cameraSource === 'wearable' && (
+              <img className="wearable-view" src={`${API}/camera/stream`} alt="" aria-hidden="true" />
+            )}
             <canvas ref={overlayRef} className="overlay" aria-hidden="true" />
           </span>
           <span className="porthole-label" aria-hidden="true">
@@ -677,10 +851,72 @@ export default function App() {
             <span>Fall detection, with a 30 second countdown before the alarm</span>
           </label>
 
-          <label className="toggle" {...hover(`Natural voice for descriptions. ${premiumVoice ? 'On' : 'Off'}`)}>
+          <fieldset className="display-fields">
+            <legend>Camera</legend>
+            <div className="sensitivity two" role="radiogroup" aria-label="Which camera to use">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={cameraSource === 'phone'}
+                className="mode sens"
+                onClick={() => chooseCamera('phone')}
+                {...hover('Phone camera')}
+              >
+                <span className="mode-title">Phone</span>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={cameraSource === 'wearable'}
+                className="mode sens"
+                onClick={() => chooseCamera('wearable')}
+                {...hover('Wearable camera')}
+              >
+                <span className="mode-title">Wearable</span>
+              </button>
+            </div>
+            <p className="hint">
+              {cameraSource === 'wearable'
+                ? (wearableCam && !wearableCam.available
+                  ? `Wearable camera not found: ${wearableCam.error || 'check that it is plugged into the laptop.'}`
+                  : 'Press your button to hear what the wearable camera sees. Hazard watch needs the phone camera, so it pauses.')
+                : 'Point your phone where you are walking.'}
+            </p>
+          </fieldset>
+
+          <label className="toggle" {...hover(`Natural voice. ${premiumVoice ? 'On' : 'Off'}`)}>
             <input type="checkbox" checked={premiumVoice} onChange={(e) => setPremiumVoice(e.target.checked)} />
-            <span>Use the natural voice for tap descriptions</span>
+            <span>Natural voice for everything (uses ElevenLabs credits)</span>
           </label>
+
+          {premiumVoice && voices.length > 0 && (
+            <fieldset className="display-fields">
+              <legend>Voice</legend>
+              <label {...hover('Choose a voice')}>
+                Choose a voice
+                <select
+                  className="voice-select"
+                  value={voiceId}
+                  onChange={(e) => {
+                    setVoiceId(e.target.value);
+                    previewVoice(voices.find((v) => v.voice_id === e.target.value));
+                  }}
+                >
+                  {voices.map((v) => (
+                    <option key={v.voice_id} value={v.voice_id}>{voiceLabel(v)}</option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => previewVoice(voices.find((v) => v.voice_id === voiceId))}
+                {...hover('Play a sample of this voice')}
+              >
+                Play a sample
+              </button>
+            </fieldset>
+          )}
 
           <fieldset className="display-fields">
             <legend>Message on my wearable</legend>

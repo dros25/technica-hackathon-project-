@@ -6,3 +6,4 @@ venv/
 .DS_Store
 node_modules/
 frontend/build/
+backend/.tts_cache/
