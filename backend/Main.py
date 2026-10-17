@@ -10,6 +10,7 @@ Run:   cd backend && python Main.py
        MOCK_VISION=1             (optional - fake descriptions, uses no API quota)
        GEMINI_MODELS=a,b         (optional - exact model fallback order)
        OPENROUTER_MODEL=...      (optional - backup model on OpenRouter)
+       WRIST_CAMERA=1            (optional - USB webcam index for "point to ask"; off to disable)
 """
 
 import base64
@@ -36,6 +37,12 @@ LIVE_PROMPT = (
     "Last time you said: \"{previous}\". If nothing important is new or different, reply with exactly: NOTHING. "
     "Otherwise reply with ONE short sentence under 15 words, hazards first "
     "(obstacles, steps, doors, people, vehicles) with direction. No preamble."
+)
+WRIST_PROMPT = (
+    "A blind person is pointing their hand-mounted camera at something and asking what it is. "
+    "In 1-2 short sentences, say what the main thing in the middle of the picture is. "
+    "If there is readable text (signs, labels, screens, doors), read it out. "
+    "Mention anything that matters for safety. No preamble."
 )
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 ELEVEN_VOICE_ID = os.getenv("ELEVEN_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")
@@ -147,6 +154,29 @@ def load_hardware():
 
 hw = load_hardware()
 
+# ---------- Wrist camera ("point to ask") ----------
+from wrist_camera import WristCamera  # backend/wrist_camera.py
+
+wrist = WristCamera()
+
+# Events the server itself creates (wrist descriptions), handed to the phone with the wearable's
+_server_events = []
+_events_lock = threading.Lock()
+_wrist_busy = False
+
+
+def push_event(event):
+    event.setdefault("time", time.time())
+    with _events_lock:
+        _server_events.append(event)
+
+
+def drain_server_events():
+    global _server_events
+    with _events_lock:
+        out, _server_events = _server_events, []
+    return out
+
 
 # ---------- AI helpers ----------
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-3.8-flash")
@@ -242,6 +272,38 @@ def describe_image(image_bytes, mime="image/jpeg", prompt=NARRATE_PROMPT):
     raise RuntimeError("No vision model worked: " + "; ".join(errors or ["no API keys set"]))
 
 
+def _describe_wrist():
+    global _wrist_busy
+    try:
+        jpeg = wrist.snapshot_jpeg()
+        if not jpeg:
+            push_event({"type": "wrist_error", "message": "The wrist camera isn't sending pictures."})
+            return
+        start = time.time()
+        text, source = describe_image(jpeg, "image/jpeg", WRIST_PROMPT)
+        print(f"[wrist] {source} in {time.time() - start:.1f}s: {text}")
+        push_event({"type": "wrist_description", "text": text, "source": source})
+    except Exception as e:
+        print(f"[wrist] failed: {e}")
+        limit = "daily limit" in str(e).lower()
+        push_event({"type": "wrist_error", "detail": str(e)[:300],
+                    "message": "The scene describer has reached its daily limit." if limit
+                    else "Couldn't describe what you're pointing at."})
+    finally:
+        _wrist_busy = False
+
+
+def start_wrist_describe():
+    """Describe the wrist camera's view in the background. False if one is already running."""
+    global _wrist_busy
+    with _events_lock:
+        if _wrist_busy:
+            return False
+        _wrist_busy = True
+    threading.Thread(target=_describe_wrist, daemon=True).start()
+    return True
+
+
 def speak(text):
     """Returns base64 mp3, or None so the phone falls back to its built-in voice."""
     if not eleven_client or not text:
@@ -281,6 +343,7 @@ def health():
         "gemini": bool(gemini_client),
         "elevenlabs": bool(eleven_client),
         "frontend_build": bool(FRONTEND_BUILD),
+        "wrist_camera": wrist.available,
     })
 
 
@@ -326,13 +389,43 @@ def speak_route():
 
 @app.route("/events", methods=["GET"])
 def events():
+    out = []
+    for ev in hw.get_events():
+        # With a wrist camera plugged in, the wearable button means "what am I pointing at?".
+        # Without one, the phone handles "button" as before (describe from the chest camera).
+        if ev.get("type") == "button" and wrist.available:
+            if start_wrist_describe():
+                out.append({"type": "wrist_looking", "time": ev.get("time", time.time())})
+        else:
+            out.append(ev)
+    out.extend(drain_server_events())
     return jsonify({
-        "events": hw.get_events(),
+        "events": out,
         "light": hw.light,
         "connected": getattr(hw, "connected", True),
         "mock": getattr(hw, "is_mock", False),
         "fall_detection": getattr(hw, "fall_detection", True),
     })
+
+
+@app.route("/wrist/describe", methods=["POST", "GET"])
+def wrist_describe():
+    """Same as pressing the wearable button with the wrist camera plugged in (handy for testing)."""
+    if not wrist.available:
+        return jsonify({"error": "wrist camera not available - check WRIST_CAMERA in .env"}), 503
+    if not start_wrist_describe():
+        return jsonify({"status": "busy"}), 409
+    push_event({"type": "wrist_looking"})
+    return jsonify({"status": "looking"})
+
+
+@app.route("/wrist/snapshot.jpg")
+def wrist_snapshot():
+    """Open in a browser to check what the wrist camera sees (and that you picked the right one)."""
+    jpeg = wrist.snapshot_jpeg()
+    if not jpeg:
+        return jsonify({"error": "wrist camera not available - check WRIST_CAMERA in .env"}), 503
+    return jpeg, 200, {"Content-Type": "image/jpeg", "Cache-Control": "no-store"}
 
 
 @app.route("/fall-detection", methods=["POST"])

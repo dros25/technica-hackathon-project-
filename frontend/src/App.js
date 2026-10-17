@@ -18,6 +18,7 @@ const LIVE_CHANGE = 12;          // how different a frame must be (0-255) to sen
 const LIVE_RECHECK_MS = 20000;   // re-check even an unchanged scene this often
 const HOVER_REPEAT_MS = 1500;    // don't repeat the same hover label too quickly
 const QUIET_AFTER_HAZARD_MS = 3000; // live narration waits this long after a hazard alert
+const WRIST_WAIT_MS = 10000;        // live narration holds off while a wrist description is coming
 
 function loadSetting(key, fallback) {
   try {
@@ -82,6 +83,7 @@ export default function App() {
   const watcherRef = useRef(null);
   const audioCtxRef = useRef(null);
   const lastHazardRef = useRef(0);
+  const wristPendingRef = useRef(0); // when a wrist ("point to ask") description was requested
   const showBoxesRef = useRef(showBoxes);
   const audioRef = useRef(null);
   const busyRef = useRef(false);
@@ -391,6 +393,7 @@ export default function App() {
       const synth = window.speechSynthesis;
       if (busyRef.current || fallRef.current || isPlayingAudio() || (synth && synth.speaking)) return;
       if (Date.now() - lastHazardRef.current < QUIET_AFTER_HAZARD_MS) return;
+      if (Date.now() - wristPendingRef.current < WRIST_WAIT_MS) return; // don't talk over the answer
       const sig = frameSignature(videoRef.current);
       if (!sig) return;
       const changed = frameDifference(sig, liveRef.current.sig) > LIVE_CHANGE;
@@ -483,6 +486,19 @@ export default function App() {
         (data.events || []).forEach((ev) => {
           if (ev.type === 'button') {
             describeRef.current('tap');
+          } else if (ev.type === 'wrist_looking') {
+            // Wearable button + wrist camera: the laptop is describing what the hand points at
+            wristPendingRef.current = Date.now();
+            if (navigator.vibrate) navigator.vibrate(60);
+            setCaption('Looking where you are pointing…');
+          } else if (ev.type === 'wrist_description') {
+            wristPendingRef.current = 0;
+            setCaption(ev.text);
+            speak(ev.text); // 'high': never cuts off a hazard warning
+          } else if (ev.type === 'wrist_error') {
+            wristPendingRef.current = 0;
+            setCaption(`${ev.message}${ev.detail ? ` (${ev.detail})` : ''}`);
+            speak(ev.message);
           } else if (ev.type === 'fall_pending') {
             startCountdown(ev.seconds || 30);
           } else if (ev.type === 'fall') {
