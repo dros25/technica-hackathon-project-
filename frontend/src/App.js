@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import './App.css';
+import { HazardWatcher, SENSITIVITY } from './hazard';
 
 // Same-origin by default: Flask serves the built app, so one ngrok https link works for everything.
 // During `npm start`, package.json "proxy" forwards these calls to Flask on port 5000.
@@ -16,6 +17,7 @@ const LIVE_INTERVAL_MS = 2500;   // how often live mode checks the camera
 const LIVE_CHANGE = 12;          // how different a frame must be (0-255) to send it
 const LIVE_RECHECK_MS = 20000;   // re-check even an unchanged scene this often
 const HOVER_REPEAT_MS = 1500;    // don't repeat the same hover label too quickly
+const QUIET_AFTER_HAZARD_MS = 3000; // live narration waits this long after a hazard alert
 
 function loadSetting(key, fallback) {
   try {
@@ -69,8 +71,18 @@ export default function App() {
   const [premiumVoice, setPremiumVoice] = useState(() => loadSetting('premiumVoice', true));
   const [line1, setLine1] = useState(() => loadSetting('line1', 'Low vision'));
   const [line2, setLine2] = useState(() => loadSetting('line2', 'Thanks for help'));
+  const [hazardOn, setHazardOn] = useState(() => loadSetting('hazardOn', true));
+  const [sensitivity, setSensitivity] = useState(() => loadSetting('sensitivity', 'normal'));
+  const [showBoxes, setShowBoxes] = useState(() => loadSetting('showBoxes', true));
+  const [hazardState, setHazardState] = useState('off'); // off | loading | on | stalled | error
+  const [hazardStats, setHazardStats] = useState(null);  // { latencyMs, fps }
 
   const videoRef = useRef(null);
+  const overlayRef = useRef(null);
+  const watcherRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const lastHazardRef = useRef(0);
+  const showBoxesRef = useRef(showBoxes);
   const audioRef = useRef(null);
   const busyRef = useRef(false);
   const fallRef = useRef(null);
@@ -87,22 +99,32 @@ export default function App() {
   useEffect(() => { readAloudRef.current = readAloud; saveSetting('readAloud', readAloud); }, [readAloud]);
   useEffect(() => { premiumRef.current = premiumVoice; saveSetting('premiumVoice', premiumVoice); }, [premiumVoice]);
   useEffect(() => { fallRef.current = fall; }, [fall]);
+  useEffect(() => { saveSetting('hazardOn', hazardOn); }, [hazardOn]);
+  useEffect(() => { showBoxesRef.current = showBoxes; saveSetting('showBoxes', showBoxes); }, [showBoxes]);
+  useEffect(() => {
+    saveSetting('sensitivity', sensitivity);
+    if (watcherRef.current) watcherRef.current.setSensitivity(SENSITIVITY[sensitivity] || 1);
+  }, [sensitivity]);
 
   // ---------- Speech ----------
-  // "high" = narration and alerts (interrupts anything). "low" = hover labels (never interrupts high).
+  // "urgent" = hazard warnings (interrupt everything, nothing interrupts them).
+  // "high" = narration and alerts. "low" = hover labels (never interrupts high or urgent).
   const isPlayingAudio = () => audioRef.current && !audioRef.current.paused;
+  const urgentSpeaking = () => window.speechSynthesis && window.speechSynthesis.speaking
+    && speechRef.current.priority === 'urgent';
 
   const speak = useCallback((text, priority = 'high') => {
     const synth = window.speechSynthesis;
     if (!text || !synth) return;
     const s = speechRef.current;
-    if (priority === 'low' && (isPlayingAudio() || (synth.speaking && s.priority === 'high'))) return;
-    if (priority === 'high' && audioRef.current) audioRef.current.pause();
+    if (priority === 'low' && (isPlayingAudio() || (synth.speaking && s.priority !== 'low'))) return;
+    if (priority === 'high' && urgentSpeaking()) return; // never talk over a hazard warning
+    if (priority !== 'low' && audioRef.current) audioRef.current.pause();
     synth.cancel();
     const id = ++s.id;
     s.priority = priority;
     const u = new SpeechSynthesisUtterance(text);
-    u.rate = 1.05;
+    u.rate = priority === 'urgent' ? 1.25 : 1.05;
     u.onend = () => { if (speechRef.current.id === id) speechRef.current.priority = null; };
     synth.speak(u);
   }, []);
@@ -110,6 +132,7 @@ export default function App() {
   const playAudio = useCallback((b64, fallbackText) => {
     const audio = audioRef.current;
     if (!audio) return speak(fallbackText);
+    if (urgentSpeaking()) return; // a hazard warning is playing; the caption still shows the text
     if (window.speechSynthesis) window.speechSynthesis.cancel();
     audio.src = `data:audio/mpeg;base64,${b64}`;
     audio.play().catch(() => speak(fallbackText));
@@ -133,9 +156,33 @@ export default function App() {
     return { onMouseEnter: say, onFocus: say };
   }, [speak]);
 
+  // Instant warning tone: Web Audio starts in ~1 ms, speech can take 100-300 ms to begin
+  const beep = useCallback((count = 1) => {
+    const ctx = audioCtxRef.current;
+    if (!ctx) return;
+    if (ctx.state === 'suspended') ctx.resume();
+    const start = ctx.currentTime;
+    for (let i = 0; i < count; i++) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = 1100;
+      gain.gain.value = 0.25;
+      osc.connect(gain).connect(ctx.destination);
+      const t = start + i * 0.18;
+      osc.start(t);
+      osc.stop(t + 0.11);
+    }
+  }, []);
+
   // Mobile browsers only allow sound after the first touch
   useEffect(() => {
     const unlock = () => {
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (Ctx && !audioCtxRef.current) audioCtxRef.current = new Ctx();
+        if (audioCtxRef.current) audioCtxRef.current.resume();
+      } catch { /* no Web Audio: speech and vibration still work */ }
       if (audioRef.current) audioRef.current.play().catch(() => {});
       if (window.speechSynthesis) window.speechSynthesis.speak(new SpeechSynthesisUtterance(''));
     };
@@ -155,7 +202,11 @@ export default function App() {
       setCaption(cameraMsgRef.current);
       return undefined;
     }
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
+    // Modest resolution + high frame rate: the hazard watcher needs speed, not detail
+    navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } },
+      audio: false,
+    })
       .then((s) => {
         stream = s;
         if (videoRef.current) videoRef.current.srcObject = s;
@@ -221,6 +272,118 @@ export default function App() {
   const describeRef = useRef(describe);
   useEffect(() => { describeRef.current = describe; }, [describe]);
 
+  // ---------- Hazard watcher (on-device, no network) ----------
+  const hazardStateRef = useRef('off');
+  const hazardHandlersRef = useRef({});
+
+  hazardHandlersRef.current.onAlert = (a) => {
+    if (fallRef.current) return; // the fall alarm owns the screen and voice
+    lastHazardRef.current = Date.now();
+    const big = a.rank >= 3;
+    beep(big ? 2 : 1);
+    if (navigator.vibrate) navigator.vibrate(big ? [200, 80, 200, 80, 200] : [150, 60, 150]);
+    const text = a.direction === 'ahead' ? `${a.name} ahead!` : `${a.name}, ${a.direction}!`;
+    setCaption(text);
+    speak(text, 'urgent');
+  };
+
+  hazardHandlersRef.current.onStatus = (state, detail) => {
+    const prev = hazardStateRef.current;
+    hazardStateRef.current = state;
+    setHazardState(state);
+    if (state === 'on' && prev === 'loading') speak('Hazard watch on.');
+    else if (state === 'on' && prev === 'stalled') speak('Hazard watch resumed.');
+    else if (state === 'stalled') {
+      setCaption('Hazard watch paused: the camera stopped.');
+      speak('Warning. Hazard watch paused. The camera stopped.', 'urgent');
+    } else if (state === 'error') {
+      console.error('[hazard] failed to start', detail);
+      setCaption("Hazard watch couldn't start. Check the connection and reload.");
+      speak("Hazard watch couldn't start.");
+    }
+    if (state !== 'on') setHazardStats(null);
+  };
+
+  // Draw boxes over the porthole (handles object-fit: cover cropping). Yellow = threat.
+  hazardHandlersRef.current.draw = (frame) => {
+    const canvas = overlayRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const cw = canvas.clientWidth, ch = canvas.clientHeight;
+    const dpr = window.devicePixelRatio || 1;
+    if (canvas.width !== Math.round(cw * dpr) || canvas.height !== Math.round(ch * dpr)) {
+      canvas.width = Math.round(cw * dpr);
+      canvas.height = Math.round(ch * dpr);
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cw, ch);
+    if (!frame || !showBoxesRef.current) return;
+    const { vw, vh, tracks } = frame;
+    const scale = Math.max(cw / vw, ch / vh);
+    const dx = (cw - vw * scale) / 2, dy = (ch - vh * scale) / 2;
+    ctx.font = '700 14px Atkinson Hyperlegible, sans-serif';
+    for (const tr of tracks) {
+      if (!tr.box) continue;
+      const x = tr.box.x1 * vw * scale + dx, y = tr.box.y1 * vh * scale + dy;
+      const w = (tr.box.x2 - tr.box.x1) * vw * scale, h = (tr.box.y2 - tr.box.y1) * vh * scale;
+      const color = tr.threat ? '#ffd23f' : '#4ff0e2';
+      ctx.strokeStyle = color;
+      ctx.lineWidth = tr.threat ? 5 : 3;
+      ctx.strokeRect(x, y, w, h);
+      const label = tr.label + (tr.ttc ? ` ${tr.ttc.toFixed(1)}s` : '');
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y - 20, ctx.measureText(label).width + 10, 20);
+      ctx.fillStyle = '#031b2e';
+      ctx.fillText(label, x + 5, y - 5);
+    }
+  };
+
+  useEffect(() => {
+    if (!cameraReady || !videoRef.current) return;
+    if (!watcherRef.current) {
+      watcherRef.current = new HazardWatcher({
+        video: videoRef.current,
+        onAlert: (a) => hazardHandlersRef.current.onAlert(a),
+        onStatus: (s, d) => hazardHandlersRef.current.onStatus(s, d),
+        onFrame: (f) => hazardHandlersRef.current.draw(f),
+        onStats: (st) => setHazardStats(st),
+      });
+      watcherRef.current.setSensitivity(SENSITIVITY[sensitivity] || 1);
+    }
+    if (hazardOn) {
+      watcherRef.current.start();
+    } else if (hazardStateRef.current !== 'off') {
+      watcherRef.current.stop();
+      hazardHandlersRef.current.draw(null);
+      speak('Hazard watch off.');
+    }
+  }, [cameraReady, hazardOn]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => () => { if (watcherRef.current) watcherRef.current.stop(); }, []);
+
+  // Keep the screen awake: if the phone sleeps, the camera stops and so does the watcher
+  useEffect(() => {
+    if (!(hazardOn || mode === 'live') || !('wakeLock' in navigator)) return undefined;
+    let lock = null;
+    let cancelled = false;
+    const acquire = async () => {
+      if (document.visibilityState !== 'visible') return;
+      try {
+        const l = await navigator.wakeLock.request('screen');
+        if (cancelled) l.release().catch(() => {});
+        else lock = l;
+      } catch { /* low battery mode etc. - the stall warning still covers us */ }
+    };
+    acquire();
+    const onVisible = () => { if (document.visibilityState === 'visible') acquire(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVisible);
+      if (lock) lock.release().catch(() => {});
+    };
+  }, [hazardOn, mode]);
+
   // ---------- Live guide ----------
   useEffect(() => {
     if (mode !== 'live') return undefined;
@@ -228,6 +391,7 @@ export default function App() {
     const timer = setInterval(() => {
       const synth = window.speechSynthesis;
       if (busyRef.current || fallRef.current || isPlayingAudio() || (synth && synth.speaking)) return;
+      if (Date.now() - lastHazardRef.current < QUIET_AFTER_HAZARD_MS) return;
       const sig = frameSignature(videoRef.current);
       if (!sig) return;
       const changed = frameDifference(sig, liveRef.current.sig) > LIVE_CHANGE;
@@ -382,6 +546,14 @@ export default function App() {
           ? { text: 'Online, demo wearable', tone: 'ok' }
           : { text: 'Online, wearable connected', tone: 'ok' };
 
+  const hazardPill = {
+    off: { text: 'Hazard watch off', tone: 'quiet' },
+    loading: { text: 'Hazard watch starting', tone: 'quiet' },
+    on: { text: hazardStats ? `Hazard watch on · ${hazardStats.latencyMs} ms` : 'Hazard watch on', tone: 'ok' },
+    stalled: { text: 'Hazard watch paused', tone: 'alert' },
+    error: { text: 'Hazard watch failed', tone: 'alert' },
+  }[hazardState] || { text: 'Hazard watch off', tone: 'quiet' };
+
   const portholeLabel = busy
     ? 'Looking'
     : mode === 'live'
@@ -403,6 +575,10 @@ export default function App() {
           <span className="status-dot" aria-hidden="true" />
           {status.text}
         </p>
+        <p className={`status status-${hazardPill.tone}`} {...hover(hazardPill.text.replace('·', ','))} tabIndex={0}>
+          <span className="status-dot" aria-hidden="true" />
+          {hazardPill.text}
+        </p>
       </header>
 
       <main className="stage">
@@ -418,6 +594,7 @@ export default function App() {
           <span className="sonar" aria-hidden="true"><i /><i /><i /></span>
           <span className="porthole-glass">
             <video ref={videoRef} autoPlay playsInline muted aria-hidden="true" />
+            <canvas ref={overlayRef} className="overlay" aria-hidden="true" />
           </span>
           <span className="porthole-label" aria-hidden="true">
             {busy ? 'Looking…' : mode === 'live' ? 'Tap for detail' : 'Tap to describe'}
@@ -453,6 +630,36 @@ export default function App() {
 
         <details className="settings">
           <summary {...hover('Settings')}>Settings</summary>
+
+          <label className="toggle" {...hover(`Hazard watch. Warn me when something comes at me fast. ${hazardOn ? 'On' : 'Off'}`)}>
+            <input type="checkbox" checked={hazardOn} onChange={(e) => setHazardOn(e.target.checked)} />
+            <span>Hazard watch: warn me when something comes at me fast</span>
+          </label>
+
+          <fieldset className="display-fields">
+            <legend>Hazard warning sensitivity</legend>
+            <p className="hint">Higher warns earlier, but may warn more often.</p>
+            <div className="sensitivity" role="radiogroup" aria-label="Hazard warning sensitivity">
+              {['low', 'normal', 'high'].map((level) => (
+                <button
+                  key={level}
+                  type="button"
+                  role="radio"
+                  aria-checked={sensitivity === level}
+                  className="mode sens"
+                  onClick={() => setSensitivity(level)}
+                  {...hover(`Sensitivity ${level}`)}
+                >
+                  <span className="mode-title">{level[0].toUpperCase() + level.slice(1)}</span>
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
+          <label className="toggle" {...hover(`Show detection boxes on the camera. ${showBoxes ? 'On' : 'Off'}`)}>
+            <input type="checkbox" checked={showBoxes} onChange={(e) => setShowBoxes(e.target.checked)} />
+            <span>Show detection boxes on the camera (for sighted helpers and demos)</span>
+          </label>
 
           <label className="toggle" {...hover(`Read buttons aloud. ${readAloud ? 'On' : 'Off'}`)}>
             <input type="checkbox" checked={readAloud} onChange={(e) => setReadAloud(e.target.checked)} />

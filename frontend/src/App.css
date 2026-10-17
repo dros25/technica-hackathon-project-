@@ -149,6 +149,15 @@ body {
 }
 .porthole.has-camera video { opacity: 0.85; }
 
+/* Hazard watcher boxes, drawn on top of the camera */
+.porthole .overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
 .porthole-label {
   position: absolute;
   left: 50%;
@@ -290,6 +299,13 @@ body {
   font: inherit;
 }
 .display-fields input[type='text']:focus { border-color: var(--seaglass); }
+
+.sensitivity {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.mode.sens { min-height: 56px; align-items: center; justify-content: center; text-align: center; }
 
 .secondary {
   min-height: 56px;
