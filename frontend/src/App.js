@@ -5,6 +5,13 @@ import './App.css';
 // During `npm start`, package.json "proxy" forwards these calls to Flask on port 5000.
 const API = process.env.REACT_APP_API_URL || '';
 
+// ngrok's free plan replaces responses with a warning page unless this header is sent
+const api = (path, options = {}) =>
+  fetch(`${API}${path}`, {
+    ...options,
+    headers: { 'ngrok-skip-browser-warning': 'true', ...(options.headers || {}) },
+  });
+
 const LIVE_INTERVAL_MS = 2500;   // how often live mode checks the camera
 const LIVE_CHANGE = 12;          // how different a frame must be (0-255) to send it
 const LIVE_RECHECK_MS = 20000;   // re-check even an unchanged scene this often
@@ -179,8 +186,8 @@ export default function App() {
       form.append('voice', kind === 'tap' && premiumRef.current ? 'eleven' : 'device');
       if (kind === 'live' && liveRef.current.text) form.append('previous', liveRef.current.text);
 
-      const res = await fetch(`${API}/narrate`, { method: 'POST', body: form });
-      const data = await res.json().catch(() => ({}));
+      const res = await api('/narrate', { method: 'POST', body: form });
+      const data = await res.json().catch(() => ({ error: `The server sent back something unexpected (${res.status}).` }));
       if (!res.ok || data.error) throw new Error(data.error || `Server error ${res.status}`);
 
       if (kind === 'live') {
@@ -195,7 +202,7 @@ export default function App() {
       console.error(err);
       if (kind === 'tap') {
         const msg = "Couldn't describe the scene. Check the connection and try again.";
-        setCaption(msg);
+        setCaption(`${msg} (${err.message || 'no details'})`); // details on screen help debugging
         speak(msg);
       }
     } finally {
@@ -239,7 +246,7 @@ export default function App() {
   useEffect(() => {
     const timer = setInterval(async () => {
       try {
-        const res = await fetch(`${API}/events`);
+        const res = await api('/events');
         const data = await res.json();
         setOnline(true);
         setWearable({ connected: data.connected !== false, mock: !!data.mock });
@@ -277,14 +284,14 @@ export default function App() {
     stopSpeaking();
     setCaption("Fall alert cancelled. Glad you're safe.");
     speak("Okay, glad you're safe.");
-    try { await fetch(`${API}/cancel`, { method: 'POST' }); } catch { /* wearable button still works */ }
+    try { await api('/cancel', { method: 'POST' }); } catch { /* wearable button still works */ }
   };
 
   const saveDisplay = async () => {
     saveSetting('line1', line1);
     saveSetting('line2', line2);
     try {
-      const res = await fetch(`${API}/lcd`, {
+      const res = await api('/lcd', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ line1, line2 }),
