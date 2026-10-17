@@ -13,7 +13,7 @@
 
   Serial protocol (115200 baud, one message per line):
     Arduino -> laptop:  BTN | FALL | CANCEL | LIGHT:<0-1023> | READY | ERR:<msg>
-    Laptop -> Arduino:  LCD:<line1>|<line2>   ALARM:ON   ALARM:OFF   TESTFALL   PING
+    Laptop -> Arduino:  LCD:<line1>|<line2>   ALARM:ON   ALARM:OFF   TESTFALL   CANCEL   PING
                         DIAG (accel status + I2C scan)   STREAM (toggle MAG:<g> output)
 */
 
@@ -313,6 +313,8 @@ void handleCommand(String cmd) {
     laptopAlarm = false;
   } else if (cmd == "TESTFALL") {
     triggerFall();
+  } else if (cmd == "CANCEL") {          // "I'm okay" from the phone
+    if (mode == FALLEN || mode == IMPACT) cancelFall();
   } else if (cmd == "PING") {
     Serial.println("READY");
   } else if (cmd == "DIAG") {

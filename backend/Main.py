@@ -26,6 +26,12 @@ NARRATE_PROMPT = (
     "Mention obstacles, steps, doors, and people first, with rough direction (left, right, ahead) "
     "and distance if you can tell. No preamble."
 )
+LIVE_PROMPT = (
+    "You are a live guide for a blind person who is walking. Look at what is directly ahead. "
+    "Last time you said: \"{previous}\". If nothing important is new or different, reply with exactly: NOTHING. "
+    "Otherwise reply with ONE short sentence under 15 words, hazards first "
+    "(obstacles, steps, doors, people, vehicles) with direction. No preamble."
+)
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 ELEVEN_VOICE_ID = os.getenv("ELEVEN_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")
 ELEVEN_MODEL = os.getenv("ELEVEN_MODEL", "eleven_flash_v2_5")  # fast + uses fewer credits
@@ -92,6 +98,9 @@ class MockHardware:
     def test_fall(self):
         self.inject("fall")
 
+    def cancel_fall(self):
+        self.inject("cancel")
+
 
 def load_hardware():
     if os.getenv("MOCK_HARDWARE") == "1":
@@ -111,7 +120,7 @@ hw = load_hardware()
 
 
 # ---------- AI helpers ----------
-def describe_image(image_bytes, mime="image/jpeg"):
+def describe_image(image_bytes, mime="image/jpeg", prompt=NARRATE_PROMPT):
     """Gemini first (for the MLH prize), OpenRouter as a backup."""
     errors = []
     if gemini_client:
@@ -119,7 +128,7 @@ def describe_image(image_bytes, mime="image/jpeg"):
             resp = gemini_client.models.generate_content(
                 model=GEMINI_MODEL,
                 contents=[genai_types.Part.from_bytes(data=image_bytes, mime_type=mime),
-                          NARRATE_PROMPT],
+                          prompt],
             )
             if resp.text:
                 return resp.text.strip(), "gemini"
@@ -134,7 +143,7 @@ def describe_image(image_bytes, mime="image/jpeg"):
             resp = openrouter_client.chat.completions.create(
                 model="google/gemini-2.5-flash",
                 messages=[{"role": "user", "content": [
-                    {"type": "text", "text": NARRATE_PROMPT},
+                    {"type": "text", "text": prompt},
                     {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
                 ]}],
             )
@@ -199,13 +208,25 @@ def narrate():
 
     try:
         start = time.time()
-        text, source = describe_image(image_bytes, image.mimetype or "image/jpeg")
+        mode = request.form.get("mode", "tap")
+        if mode == "live":
+            previous = request.form.get("previous", "").strip()[:300] or "nothing yet"
+            prompt = LIVE_PROMPT.format(previous=previous.replace('"', "'"))
+        else:
+            prompt = NARRATE_PROMPT
+        text, source = describe_image(image_bytes, image.mimetype or "image/jpeg", prompt)
         print(f"[narrate] {source} in {time.time() - start:.1f}s: {text}")
     except Exception as e:
         return jsonify({"error": str(e)}), 502
 
     # audio is null if ElevenLabs fails - the frontend should then use speechSynthesis
-    return jsonify({"text": text, "audio": speak(text), "source": source})
+    # Live mode: stay quiet when the scene hasn't meaningfully changed
+    if mode == "live" and text.strip().strip(".").upper() == "NOTHING":
+        return jsonify({"text": "", "audio": None, "quiet": True, "source": source})
+
+    # voice=device -> the phone speaks it itself (instant, saves ElevenLabs credits; used by live mode)
+    want_audio = request.form.get("voice", "eleven") == "eleven"
+    return jsonify({"text": text, "audio": speak(text) if want_audio else None, "source": source})
 
 
 @app.route("/speak", methods=["POST"])
@@ -230,6 +251,13 @@ def events():
 def lcd():
     data = request.get_json(silent=True) or {}
     hw.set_lcd(str(data.get("line1", ""))[:16], str(data.get("line2", ""))[:16])
+    return jsonify({"status": "success"})
+
+
+@app.route("/cancel", methods=["POST"])
+def cancel():
+    """'I'm okay' from the phone: stops the fall alarm on the wearable too."""
+    hw.cancel_fall()
     return jsonify({"status": "success"})
 
 

@@ -1,0 +1,343 @@
+/* Guardian: a deep-sea porthole. High contrast everywhere (all text pairs pass WCAG AAA). */
+:root {
+  --abyss: #031b2e;      /* page */
+  --trench: #08304d;     /* raised surfaces */
+  --current: #0d4670;    /* borders on dark */
+  --foam: #f4fbff;       /* body text      17:1 on abyss */
+  --mist: #b8d4e6;       /* secondary text 11:1 on abyss */
+  --seaglass: #4ff0e2;   /* primary        12:1 on abyss */
+  --buoy: #ffd23f;       /* focus + alarm  12:1 on abyss */
+  --rim: #c9dce8;        /* porthole frame */
+  --font: 'Atkinson Hyperlegible', system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--abyss);
+  color: var(--foam);
+  font-family: var(--font);
+  font-size: 1.25rem;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* One focus style everywhere: thick buoy-yellow ring */
+:focus-visible {
+  outline: 4px solid var(--buoy);
+  outline-offset: 4px;
+}
+
+.app {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom));
+  /* light fades as you go deeper */
+  background: linear-gradient(180deg, #06304f 0%, var(--abyss) 45%, #021321 100%);
+}
+
+/* ---------- Top bar ---------- */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  max-width: 640px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.brand-mark {
+  width: 34px;
+  height: 34px;
+  fill: none;
+  stroke: var(--seaglass);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 6px 14px;
+  border: 2px solid var(--current);
+  border-radius: 999px;
+  background: var(--trench);
+  font-size: 1rem;
+  font-weight: 700;
+}
+.status-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--mist); }
+.status-ok .status-dot { background: var(--seaglass); }
+.status-alert { border-color: var(--buoy); color: var(--buoy); }
+.status-alert .status-dot { background: var(--buoy); }
+
+/* ---------- Stage ---------- */
+.stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  max-width: 640px;
+  width: 100%;
+  margin: 0 auto;
+  padding-top: 24px;
+}
+
+/* ---------- The porthole (main button) ---------- */
+.porthole {
+  --size: min(80vw, 48dvh, 420px);
+  position: relative;
+  width: var(--size);
+  height: var(--size);
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.porthole-glass {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  /* brass-free frame: thick rim with rivets */
+  border: 14px solid var(--rim);
+  box-shadow:
+    0 0 0 4px var(--abyss),
+    0 0 0 8px var(--seaglass),
+    inset 0 0 40px rgba(0, 0, 0, 0.6);
+  background: radial-gradient(circle at 50% 35%, #0f5a8a, var(--abyss) 75%);
+}
+.porthole-glass::after { /* rivets */
+  content: '';
+  position: absolute;
+  inset: -14px;
+  border-radius: 50%;
+  background: repeating-conic-gradient(from 11.25deg, var(--abyss) 0 2.5deg, transparent 2.5deg 22.5deg);
+  -webkit-mask: radial-gradient(circle, transparent calc(50% - 8px), #000 calc(50% - 8px) calc(50% - 4px), transparent calc(50% - 4px));
+          mask: radial-gradient(circle, transparent calc(50% - 8px), #000 calc(50% - 8px) calc(50% - 4px), transparent calc(50% - 4px));
+  pointer-events: none;
+}
+
+.porthole video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.6s;
+}
+.porthole.has-camera video { opacity: 0.85; }
+
+.porthole-label {
+  position: absolute;
+  left: 50%;
+  bottom: 16%;
+  transform: translateX(-50%);
+  padding: 10px 22px;
+  border-radius: 999px;
+  background: var(--abyss);
+  border: 3px solid var(--seaglass);
+  color: var(--seaglass);
+  font-size: clamp(1.25rem, 5vw, 1.6rem);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.porthole:hover .porthole-label,
+.porthole:focus-visible .porthole-label {
+  background: var(--seaglass);
+  color: var(--abyss);
+}
+.porthole:active .porthole-glass { transform: scale(0.98); }
+
+/* Sonar rings: the one bit of motion. Pulse fast while looking, slow in live mode. */
+.sonar { position: absolute; inset: 0; pointer-events: none; }
+.sonar i {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 3px solid var(--seaglass);
+  opacity: 0;
+}
+.is-live .sonar i { animation: ping 4.5s ease-out infinite; }
+.porthole.is-busy .sonar i { animation: ping 1.4s ease-out infinite; }
+.sonar i:nth-child(2) { animation-delay: 0.45s !important; }
+.sonar i:nth-child(3) { animation-delay: 0.9s !important; }
+.is-live .sonar i:nth-child(2) { animation-delay: 1.5s !important; }
+.is-live .sonar i:nth-child(3) { animation-delay: 3s !important; }
+
+@keyframes ping {
+  0%   { transform: scale(1);    opacity: 0.9; }
+  100% { transform: scale(1.32); opacity: 0; }
+}
+
+/* ---------- Caption ---------- */
+.caption {
+  width: 100%;
+  min-height: 3.2em;
+  margin: 0;
+  padding: 16px 20px;
+  border-left: 6px solid var(--seaglass);
+  border-radius: 6px;
+  background: var(--trench);
+  font-size: clamp(1.3rem, 4.6vw, 1.6rem);
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+/* ---------- Mode switch ---------- */
+.modes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  width: 100%;
+}
+
+.mode {
+  min-height: 76px;
+  padding: 12px;
+  border: 3px solid var(--current);
+  border-radius: 14px;
+  background: var(--trench);
+  color: var(--foam);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mode-title { font-size: 1.3rem; font-weight: 700; }
+.mode-sub { font-size: 1rem; color: var(--mist); }
+.mode:hover { border-color: var(--seaglass); }
+.mode[aria-checked='true'] {
+  background: var(--seaglass);
+  border-color: var(--seaglass);
+  color: var(--abyss);
+}
+.mode[aria-checked='true'] .mode-sub { color: var(--abyss); }
+
+/* ---------- Settings ---------- */
+.settings {
+  width: 100%;
+  border: 2px solid var(--current);
+  border-radius: 14px;
+  background: var(--trench);
+}
+.settings summary {
+  padding: 16px 20px;
+  font-size: 1.3rem;
+  font-weight: 700;
+  cursor: pointer;
+  list-style-position: inside;
+}
+.settings[open] summary { border-bottom: 2px solid var(--current); }
+.settings > :not(summary) { margin: 16px 20px; }
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 48px;
+  cursor: pointer;
+}
+.toggle input {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  accent-color: var(--seaglass);
+}
+
+.display-fields {
+  border: 2px solid var(--current);
+  border-radius: 10px;
+  padding: 14px 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.display-fields legend { padding: 0 8px; font-weight: 700; }
+.hint { margin: 0; font-size: 1rem; color: var(--mist); }
+.display-fields label { display: flex; flex-direction: column; gap: 6px; font-weight: 700; }
+.display-fields input[type='text'] {
+  min-height: 52px;
+  padding: 10px 14px;
+  border: 3px solid var(--mist);
+  border-radius: 8px;
+  background: var(--abyss);
+  color: var(--foam);
+  font: inherit;
+}
+.display-fields input[type='text']:focus { border-color: var(--seaglass); }
+
+.secondary {
+  min-height: 56px;
+  border: 3px solid var(--seaglass);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--seaglass);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.secondary:hover { background: var(--seaglass); color: var(--abyss); }
+
+/* ---------- Fall alarm: a solid rescue-buoy screen, no flashing ---------- */
+.alarm {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 24px;
+  background: var(--buoy);
+  color: var(--abyss);
+  text-align: center;
+}
+.alarm h2 { margin: 0; font-size: clamp(2.6rem, 12vw, 4.5rem); line-height: 1.05; }
+.alarm p { margin: 0; max-width: 22ch; font-size: 1.4rem; font-weight: 700; }
+.alarm-ok {
+  margin-top: 16px;
+  width: min(100%, 420px);
+  min-height: 120px;
+  border: 0;
+  border-radius: 20px;
+  background: var(--abyss);
+  color: var(--buoy);
+  font: inherit;
+  font-size: 2.4rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.alarm-ok:focus-visible { outline-color: var(--abyss); }
+
+@media (prefers-reduced-motion: reduce) {
+  .sonar i { animation: none !important; }
+  .porthole.is-busy .sonar i:first-child,
+  .is-live .sonar i:first-child { opacity: 1; transform: scale(1.06); }
+  .porthole video { transition: none; }
+}

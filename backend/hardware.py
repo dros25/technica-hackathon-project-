@@ -160,6 +160,10 @@ class Hardware:
     def test_fall(self):
         self.send("TESTFALL")
 
+    def cancel_fall(self):
+        """Phone's "I'm okay" - Arduino stops the alarm and replies CANCEL."""
+        return self.send("CANCEL")
+
 
 if __name__ == "__main__":
     hw = Hardware()

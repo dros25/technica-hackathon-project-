@@ -1,215 +1,425 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import './App.css';
 
 // Same-origin by default: Flask serves the built app, so one ngrok https link works for everything.
 // During `npm start`, package.json "proxy" forwards these calls to Flask on port 5000.
 const API = process.env.REACT_APP_API_URL || '';
 
-function App() {
-  const [statusText, setStatusText] = useState('System ready. Tap screen to scan surroundings.');
-  const [connectionStatus, setConnectionStatus] = useState('Connecting...');
-  const [line1, setLine1] = useState('');
-  const [line2, setLine2] = useState('');
-  
+const LIVE_INTERVAL_MS = 2500;   // how often live mode checks the camera
+const LIVE_CHANGE = 12;          // how different a frame must be (0-255) to send it
+const LIVE_RECHECK_MS = 20000;   // re-check even an unchanged scene this often
+const HOVER_REPEAT_MS = 1500;    // don't repeat the same hover label too quickly
+
+function loadSetting(key, fallback) {
+  try {
+    const v = localStorage.getItem('guardian.' + key);
+    return v === null ? fallback : JSON.parse(v);
+  } catch {
+    return fallback;
+  }
+}
+function saveSetting(key, value) {
+  try { localStorage.setItem('guardian.' + key, JSON.stringify(value)); } catch { /* private mode */ }
+}
+
+function grabFrame(video, maxWidth) {
+  if (!video || !video.videoWidth) return null;
+  const scale = Math.min(1, maxWidth / video.videoWidth);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(video.videoWidth * scale);
+  canvas.height = Math.round(video.videoHeight * scale);
+  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+// Tiny grayscale thumbnail used to notice when the scene changes
+function frameSignature(video) {
+  const c = grabFrame(video, 32);
+  if (!c) return null;
+  const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+  const out = new Array(d.length / 4);
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) out[j] = (d[i] + d[i + 1] + d[i + 2]) / 3;
+  return out;
+}
+function frameDifference(a, b) {
+  if (!a || !b || a.length !== b.length) return 255;
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i]);
+  return sum / a.length;
+}
+
+export default function App() {
+  const [mode, setMode] = useState('tap'); // 'tap' | 'live'
+  const [caption, setCaption] = useState('Tap the porthole to hear what is ahead of you.');
+  const [busy, setBusy] = useState(false);
+  const [online, setOnline] = useState(null);
+  const [wearable, setWearable] = useState({ connected: true, mock: false });
+  const [fall, setFall] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
+  const [readAloud, setReadAloud] = useState(() => loadSetting('readAloud', true));
+  const [premiumVoice, setPremiumVoice] = useState(() => loadSetting('premiumVoice', true));
+  const [line1, setLine1] = useState(() => loadSetting('line1', 'Low vision'));
+  const [line2, setLine2] = useState(() => loadSetting('line2', 'Thanks for help'));
+
   const videoRef = useRef(null);
   const audioRef = useRef(null);
-  const audioUnlocked = useRef(false);
+  const busyRef = useRef(false);
+  const fallRef = useRef(false);
+  const readAloudRef = useRef(readAloud);
+  const premiumRef = useRef(premiumVoice);
+  const cameraMsgRef = useRef('The camera is starting. Try again in a moment.');
+  const speechRef = useRef({ id: 0, priority: null });
+  const lastHoverRef = useRef({ text: '', at: 0 });
+  const liveRef = useRef({ text: '', at: 0, sig: null });
 
-  // 1. Start Camera Feed (Rear facing)
-  useEffect(() => {
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
-      .then(stream => {
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-      })
-      .catch(err => {
-        console.error("Camera access error:", err);
-        setStatusText('Camera access denied or unavailable.');
-      });
+  useEffect(() => { readAloudRef.current = readAloud; saveSetting('readAloud', readAloud); }, [readAloud]);
+  useEffect(() => { premiumRef.current = premiumVoice; saveSetting('premiumVoice', premiumVoice); }, [premiumVoice]);
+  useEffect(() => { fallRef.current = fall; }, [fall]);
+
+  // ---------- Speech ----------
+  // "high" = narration and alerts (interrupts anything). "low" = hover labels (never interrupts high).
+  const isPlayingAudio = () => audioRef.current && !audioRef.current.paused;
+
+  const speak = useCallback((text, priority = 'high') => {
+    const synth = window.speechSynthesis;
+    if (!text || !synth) return;
+    const s = speechRef.current;
+    if (priority === 'low' && (isPlayingAudio() || (synth.speaking && s.priority === 'high'))) return;
+    if (priority === 'high' && audioRef.current) audioRef.current.pause();
+    synth.cancel();
+    const id = ++s.id;
+    s.priority = priority;
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = 1.05;
+    u.onend = () => { if (speechRef.current.id === id) speechRef.current.priority = null; };
+    synth.speak(u);
   }, []);
 
-  // 2. Fallback Speech Synthesis if ElevenLabs audio fails
-  const speakFallback = (text) => {
-    if (!window.speechSynthesis) return;
-    window.speechSynthesis.cancel(); // don't queue up stale messages
-    const utterance = new SpeechSynthesisUtterance(text);
-    window.speechSynthesis.speak(utterance);
-  };
+  const playAudio = useCallback((b64, fallbackText) => {
+    const audio = audioRef.current;
+    if (!audio) return speak(fallbackText);
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    audio.src = `data:audio/mpeg;base64,${b64}`;
+    audio.play().catch(() => speak(fallbackText));
+  }, [speak]);
 
-  const stopSpeaking = () => {
+  const stopSpeaking = useCallback(() => {
     if (window.speechSynthesis) window.speechSynthesis.cancel();
     if (audioRef.current) audioRef.current.pause();
-  };
+  }, []);
 
-  // 3. Capture Photo & Send to Flask Backend (/narrate)
-  const captureAndNarrate = async () => {
-    // Unlock mobile audio on first tap
-    if (!audioUnlocked.current && audioRef.current) {
-      audioRef.current.play().catch(() => {});
+  // Read a control's label when the mouse rests on it or keyboard focus lands on it
+  const hover = useCallback((label) => {
+    const say = () => {
+      if (!readAloudRef.current) return;
+      const last = lastHoverRef.current;
+      const now = Date.now();
+      if (last.text === label && now - last.at < HOVER_REPEAT_MS) return;
+      lastHoverRef.current = { text: label, at: now };
+      speak(label, 'low');
+    };
+    return { onMouseEnter: say, onFocus: say };
+  }, [speak]);
+
+  // Mobile browsers only allow sound after the first touch
+  useEffect(() => {
+    const unlock = () => {
+      if (audioRef.current) audioRef.current.play().catch(() => {});
       if (window.speechSynthesis) window.speechSynthesis.speak(new SpeechSynthesisUtterance(''));
-      audioUnlocked.current = true;
+    };
+    window.addEventListener('pointerdown', unlock, { once: true });
+    window.addEventListener('keydown', unlock, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+  }, []);
+
+  // ---------- Camera ----------
+  useEffect(() => {
+    let stream;
+    if (!window.isSecureContext || !navigator.mediaDevices) {
+      cameraMsgRef.current = 'The camera needs a secure link. Open the https link for this app.';
+      setCaption(cameraMsgRef.current);
+      return undefined;
     }
-    if (navigator.vibrate) navigator.vibrate(100);
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
+      .then((s) => {
+        stream = s;
+        if (videoRef.current) videoRef.current.srcObject = s;
+        setCameraReady(true);
+      })
+      .catch((err) => {
+        console.error('Camera error:', err);
+        cameraMsgRef.current = 'Camera access was blocked. Allow camera access for this site and reload.';
+        setCaption(cameraMsgRef.current);
+      });
+    return () => { if (stream) stream.getTracks().forEach((t) => t.stop()); };
+  }, []);
 
-    setStatusText('Analyzing surroundings...');
-
-    const video = videoRef.current;
-    if (!video || !video.videoWidth) {
-      setStatusText('Camera not ready yet. Try again in a moment.');
-      speakFallback('Camera not ready yet.');
+  // ---------- Describe the scene ----------
+  const describe = useCallback(async (kind = 'tap') => {
+    if (busyRef.current) return;
+    const canvas = grabFrame(videoRef.current, 640);
+    if (!canvas) {
+      if (kind === 'tap') { setCaption(cameraMsgRef.current); speak(cameraMsgRef.current); }
       return;
     }
+    busyRef.current = true;
+    setBusy(true);
+    if (kind === 'tap') {
+      setCaption('Looking…');
+      if (navigator.vibrate) navigator.vibrate(60);
+    }
+    try {
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+      const form = new FormData();
+      form.append('image', blob, 'frame.jpg');
+      form.append('mode', kind);
+      form.append('voice', kind === 'tap' && premiumRef.current ? 'eleven' : 'device');
+      if (kind === 'live' && liveRef.current.text) form.append('previous', liveRef.current.text);
 
-    // Shrink to 640px wide: much faster upload and AI response
-    const scale = Math.min(1, 640 / video.videoWidth);
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(video.videoWidth * scale);
-    canvas.height = Math.round(video.videoHeight * scale);
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const res = await fetch(`${API}/narrate`, { method: 'POST', body: form });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) throw new Error(data.error || `Server error ${res.status}`);
 
-    canvas.toBlob(async (blob) => {
-      const formData = new FormData();
-      formData.append('image', blob, 'frame.jpg');
-
-      try {
-        // Change localhost to your laptop's local IP if testing from a physical phone!
-        const response = await fetch(`${API}/narrate`, {
-          method: 'POST',
-          body: formData,
-        });
-
-        const data = await response.json();
-        if (data.error) throw new Error(data.error);
-
-        setStatusText(data.text);
-
-        if (data.audio && audioRef.current) {
-          audioRef.current.src = `data:audio/mp3;base64,${data.audio}`;
-          audioRef.current.play().catch(() => speakFallback(data.text));
-        } else {
-          speakFallback(data.text);
-        }
-      } catch (err) {
-        console.error(err);
-        setStatusText('AI processing failed. Using local voice fallback.');
-        speakFallback('Unable to process image.');
+      if (kind === 'live') {
+        liveRef.current.at = Date.now();
+        if (!data.text) return; // nothing new worth saying
+        liveRef.current.text = data.text;
       }
-    }, 'image/jpeg', 0.8);
+      setCaption(data.text);
+      if (data.audio) playAudio(data.audio, data.text);
+      else speak(data.text);
+    } catch (err) {
+      console.error(err);
+      if (kind === 'tap') {
+        const msg = "Couldn't describe the scene. Check the connection and try again.";
+        setCaption(msg);
+        speak(msg);
+      }
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }, [speak, playAudio]);
+
+  const describeRef = useRef(describe);
+  useEffect(() => { describeRef.current = describe; }, [describe]);
+
+  // ---------- Live guide ----------
+  useEffect(() => {
+    if (mode !== 'live') return undefined;
+    liveRef.current = { text: '', at: 0, sig: null };
+    const timer = setInterval(() => {
+      const synth = window.speechSynthesis;
+      if (busyRef.current || fallRef.current || isPlayingAudio() || (synth && synth.speaking)) return;
+      const sig = frameSignature(videoRef.current);
+      if (!sig) return;
+      const changed = frameDifference(sig, liveRef.current.sig) > LIVE_CHANGE;
+      const stale = Date.now() - liveRef.current.at > LIVE_RECHECK_MS;
+      if (!changed && !stale) return;
+      liveRef.current.sig = sig;
+      describeRef.current('live');
+    }, LIVE_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [mode]);
+
+  const chooseMode = (next) => {
+    if (next === mode) return;
+    setMode(next);
+    const msg = next === 'live'
+      ? "Live guide on. I'll speak when something new appears."
+      : 'Tap mode on. Tap the porthole or press your button to hear what is ahead.';
+    setCaption(msg);
+    speak(msg);
   };
 
-  // 4. Update Wearable LCD Message
-  const updateLCD = async () => {
+  // ---------- Wearable events ----------
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      try {
+        const res = await fetch(`${API}/events`);
+        const data = await res.json();
+        setOnline(true);
+        setWearable({ connected: data.connected !== false, mock: !!data.mock });
+        (data.events || []).forEach((ev) => {
+          if (ev.type === 'button') {
+            describeRef.current('tap');
+          } else if (ev.type === 'fall') {
+            setFall(true);
+            speak("Fall detected. If you're okay, press your button or tap I'm okay.");
+          } else if (ev.type === 'cancel') {
+            setFall(false);
+            stopSpeaking();
+            setCaption("Fall alert cancelled. Glad you're safe.");
+            speak("Okay, glad you're safe.");
+          } else if (ev.type === 'dark') {
+            setCaption("It's getting dark around you. Take extra care.");
+            speak("It's getting dark around you. Take extra care.");
+          } else if (ev.type === 'disconnected') {
+            setCaption('Wearable disconnected. Trying to reconnect.');
+            speak('Wearable disconnected.');
+          } else if (ev.type === 'reconnected') {
+            setCaption('Wearable reconnected.');
+            speak('Wearable reconnected.');
+          }
+        });
+      } catch {
+        setOnline(false);
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [speak, stopSpeaking]);
+
+  const imOkay = async () => {
+    setFall(false);
+    stopSpeaking();
+    setCaption("Fall alert cancelled. Glad you're safe.");
+    speak("Okay, glad you're safe.");
+    try { await fetch(`${API}/cancel`, { method: 'POST' }); } catch { /* wearable button still works */ }
+  };
+
+  const saveDisplay = async () => {
+    saveSetting('line1', line1);
+    saveSetting('line2', line2);
     try {
       const res = await fetch(`${API}/lcd`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ line1, line2 }),
       });
-      if (!res.ok) throw new Error('bad response');
-      setStatusText('Wearable display updated.');
-      speakFallback('Wearable display updated.');
-    } catch (e) {
-      setStatusText('Could not update the wearable display.');
-      speakFallback('Could not update the wearable display.');
+      if (!res.ok) throw new Error();
+      setCaption('Wearable display updated.');
+      speak('Wearable display updated.');
+    } catch {
+      setCaption("Couldn't update the wearable display. Check the connection.");
+      speak("Couldn't update the wearable display.");
     }
   };
 
-  // 5. Poll Backend Events Every 1 Second (Listening for Arduino / Falls)
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`${API}/events`);
-        const data = await res.json();
-        setConnectionStatus('Online');
+  // ---------- Labels ----------
+  const status = online === false
+    ? { text: 'Offline', tone: 'alert' }
+    : online === null
+      ? { text: 'Connecting', tone: 'quiet' }
+      : !wearable.connected
+        ? { text: 'Wearable disconnected', tone: 'alert' }
+        : wearable.mock
+          ? { text: 'Online, demo wearable', tone: 'ok' }
+          : { text: 'Online, wearable connected', tone: 'ok' };
 
-        if (data.events && data.events.length > 0) {
-          data.events.forEach(ev => {
-            if (ev.type === 'button') {
-              captureAndNarrate();
-            } else if (ev.type === 'fall') {
-              setStatusText('🚨 FALL DETECTED! Press button if safe.');
-              speakFallback('Fall detected. Press the button if you are okay.');
-            } else if (ev.type === 'cancel') {
-              stopSpeaking();
-              setStatusText("Fall alert cancelled. You're safe.");
-              speakFallback("Okay, glad you're safe.");
-            } else if (ev.type === 'dark') {
-              setStatusText('🌙 Low light detected. Take extra care.');
-              speakFallback("It's getting dark around you. Take extra care.");
-            } else if (ev.type === 'disconnected') {
-              setStatusText('⚠️ Wearable disconnected. Trying to reconnect.');
-              speakFallback('Wearable disconnected.');
-            } else if (ev.type === 'reconnected') {
-              setStatusText('Wearable reconnected.');
-              speakFallback('Wearable reconnected.');
-            }
-          });
-        }
-      } catch (e) {
-        setConnectionStatus('Offline');
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, []);
+  const portholeLabel = busy
+    ? 'Looking'
+    : mode === 'live'
+      ? 'Live guide is on. Tap for a full description'
+      : 'Tap to describe what is ahead';
 
   return (
-    <div style={{ background: '#000', color: '#fff', height: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '20px', boxSizing: 'border-box' }}>
-      
-      {/* Hidden camera preview & audio player */}
-      <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 1, opacity: 0.15, overflow: 'hidden', pointerEvents: 'none' }}>
-        <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-      </div>
-      <audio ref={audioRef} style={{ display: 'none' }} />
+    <div className={`app ${mode === 'live' ? 'is-live' : ''}`}>
+      <header className="topbar">
+        <h1 className="brand">
+          <svg className="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+            <path d="M2 20c4 0 4-4 8-4s4 4 8 4 4-4 8-4 4 4 4 4" />
+            <path d="M2 26c4 0 4-4 8-4s4 4 8 4 4-4 8-4 4 4 4 4" />
+            <circle cx="16" cy="9" r="5" />
+          </svg>
+          Guardian
+        </h1>
+        <p className={`status status-${status.tone}`} {...hover(status.text)} tabIndex={0}>
+          <span className="status-dot" aria-hidden="true" />
+          {status.text}
+        </p>
+      </header>
 
-      {/* UI Content Layer */}
-      <div style={{ position: 'relative', zIndex: 2, display: 'flex', flexDirection: 'column', height: '100%', justifyContent: 'space-between' }}>
-        
-        <header style={{ display: 'flex', justifyContent: 'space-between', background: 'rgba(255,255,255,0.1)', padding: '10px 15px', borderRadius: '8px' }}>
-          <h2 style={{ margin: 0 }}>Guardian</h2>
-          <span>Status: {connectionStatus}</span>
-        </header>
-
-        {/* Giant Accessibility Button */}
+      <main className="stage">
         <button
-          onClick={captureAndNarrate}
-          aria-label="Tap to describe what is in front of you"
-          style={{ flexGrow: 1, background: '#00ff66', color: '#000', border: 'none', borderRadius: '20px', fontSize: '2.5rem', fontWeight: 'bold', margin: '20px 0', cursor: 'pointer', boxShadow: '0 0 20px rgba(0,255,102,0.5)' }}
+          type="button"
+          className={`porthole ${busy ? 'is-busy' : ''} ${cameraReady ? 'has-camera' : ''}`}
+          onClick={() => describe('tap')}
+          aria-label={portholeLabel}
+          aria-busy={busy}
+          autoFocus
+          {...hover(portholeLabel)}
         >
-          TAP TO DESCRIBE
+          <span className="sonar" aria-hidden="true"><i /><i /><i /></span>
+          <span className="porthole-glass">
+            <video ref={videoRef} autoPlay playsInline muted aria-hidden="true" />
+          </span>
+          <span className="porthole-label" aria-hidden="true">
+            {busy ? 'Looking…' : mode === 'live' ? 'Tap for detail' : 'Tap to describe'}
+          </span>
         </button>
 
-        {/* Status Box */}
-        <div role="status" aria-live="polite" style={{ background: 'rgba(255,255,255,0.1)', padding: '15px', borderRadius: '10px', fontSize: '1.2rem', minHeight: '60px' }}>
-          {statusText}
-        </div>
+        <p className="caption" role="status" aria-live="polite">{caption}</p>
 
-        {/* Settings Panel */}
-        <div style={{ background: 'rgba(255,255,255,0.15)', padding: '15px', borderRadius: '10px', marginTop: '10px' }}>
-          <h4 style={{ margin: '0 0 10px 0' }}>Wearable LCD Settings</h4>
-          <input 
-            type="text" placeholder="Line 1 (e.g. Low vision)" value={line1} onChange={e => setLine1(e.target.value)} maxLength={16}
-            style={{ width: '100%', padding: '8px', marginBottom: '8px', fontSize: '1rem', boxSizing: 'border-box' }} 
-          />
-          <input 
-            type="text" placeholder="Line 2 (e.g. Thanks for help)" value={line2} onChange={e => setLine2(e.target.value)} maxLength={16}
-            style={{ width: '100%', padding: '8px', marginBottom: '8px', fontSize: '1rem', boxSizing: 'border-box' }} 
-          />
-          <button onClick={updateLCD} style={{ padding: '10px', background: '#00ff66', border: 'none', fontWeight: 'bold', width: '100%', fontSize: '1rem', cursor: 'pointer' }}>
-            Update LCD
+        <div className="modes" role="radiogroup" aria-label="How Guardian describes the scene">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={mode === 'tap'}
+            className="mode"
+            onClick={() => chooseMode('tap')}
+            {...hover('Tap mode. Describe the scene only when I ask')}
+          >
+            <span className="mode-title">Tap mode</span>
+            <span className="mode-sub">Describe when I ask</span>
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={mode === 'live'}
+            className="mode"
+            onClick={() => chooseMode('live')}
+            {...hover('Live guide. Speak up whenever something new appears')}
+          >
+            <span className="mode-title">Live guide</span>
+            <span className="mode-sub">Speak when things change</span>
           </button>
         </div>
 
-      </div>
+        <details className="settings">
+          <summary {...hover('Settings')}>Settings</summary>
+
+          <label className="toggle" {...hover(`Read buttons aloud. ${readAloud ? 'On' : 'Off'}`)}>
+            <input type="checkbox" checked={readAloud} onChange={(e) => setReadAloud(e.target.checked)} />
+            <span>Read buttons aloud when I point at them</span>
+          </label>
+
+          <label className="toggle" {...hover(`Natural voice for descriptions. ${premiumVoice ? 'On' : 'Off'}`)}>
+            <input type="checkbox" checked={premiumVoice} onChange={(e) => setPremiumVoice(e.target.checked)} />
+            <span>Use the natural voice for tap descriptions</span>
+          </label>
+
+          <fieldset className="display-fields">
+            <legend>Message on my wearable</legend>
+            <p className="hint">People near you see this. Up to 16 characters per line.</p>
+            <label {...hover('Wearable message, first line')}>
+              First line
+              <input type="text" value={line1} maxLength={16} onChange={(e) => setLine1(e.target.value)} />
+            </label>
+            <label {...hover('Wearable message, second line')}>
+              Second line
+              <input type="text" value={line2} maxLength={16} onChange={(e) => setLine2(e.target.value)} />
+            </label>
+            <button type="button" className="secondary" onClick={saveDisplay} {...hover('Update wearable message')}>
+              Update wearable message
+            </button>
+          </fieldset>
+        </details>
+      </main>
+
+      {fall && (
+        <div className="alarm" role="alertdialog" aria-modal="true" aria-labelledby="fall-title" aria-describedby="fall-desc">
+          <h2 id="fall-title">Fall detected</h2>
+          <p id="fall-desc">Your wearable is asking people nearby for help.</p>
+          <button type="button" className="alarm-ok" onClick={imOkay} autoFocus {...hover("I'm okay. Cancel the alarm")}>
+            I'm okay
+          </button>
+        </div>
+      )}
+
+      <audio ref={audioRef} hidden />
     </div>
   );
 }
-
-export default App;
-
-
-
-
-
-
