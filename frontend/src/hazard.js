@@ -9,41 +9,83 @@
 // The growth rate of the box's (log) size is 1 / time-to-collision, so we get
 // "contact in ~1.5 s" without knowing the real distance.
 
-import { FilesetResolver, ObjectDetector } from '@mediapipe/tasks-vision';
+import { FilesetResolver, ImageClassifier, ObjectDetector } from '@mediapipe/tasks-vision';
+import { LoomingDetector } from './looming';
 
 // Keep the wasm version identical to the npm package version above.
 const WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
 const MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite';
+// Second, finer model (1,000 categories: "tiger", "water bottle"...). Runs only on the box being warned about.
+const CLASSIFIER_URL =
+  'https://storage.googleapis.com/mediapipe-models/image_classifier/efficientnet_lite0/float32/1/efficientnet_lite0.tflite';
 
-// Things worth warning about. ttc = seconds-to-contact that triggers an alert.
-// rank = priority when several things approach at once (higher wins).
+// The detector knows 80 everyday categories. These get special timing/priority/names;
+// everything else uses DEFAULT_CLASS and a tidied-up version of its label.
+// ttc = seconds-to-contact that triggers an alert. rank = priority (higher wins).
+// refine = let the fine classifier rename it ("cat" -> "tiger"); off for people, vehicles,
+// and dogs (it would read out breed names).
 const CLASSES = {
-  car:          { name: 'Car',       ttc: 3.0, rank: 3 },
-  bus:          { name: 'Bus',       ttc: 3.0, rank: 3 },
-  truck:        { name: 'Truck',     ttc: 3.0, rank: 3 },
-  motorcycle:   { name: 'Motorbike', ttc: 3.0, rank: 3 },
-  bicycle:      { name: 'Bike',      ttc: 3.0, rank: 3 },
-  person:       { name: 'Person',    ttc: 2.0, rank: 2 },
-  dog:          { name: 'Dog',       ttc: 2.0, rank: 2 },
-  horse:        { name: 'Horse',     ttc: 2.5, rank: 2 },
-  skateboard:   { name: 'Skateboard', ttc: 2.0, rank: 2 },
-  'sports ball': { name: 'Ball',     ttc: 1.5, rank: 1 },
-  frisbee:      { name: 'Frisbee',   ttc: 1.5, rank: 1 },
+  car:          { name: 'Car',       ttc: 3.5, rank: 3, refine: false },
+  bus:          { name: 'Bus',       ttc: 3.5, rank: 3, refine: false },
+  truck:        { name: 'Truck',     ttc: 3.5, rank: 3, refine: false },
+  train:        { name: 'Train',     ttc: 3.5, rank: 3, refine: false },
+  motorcycle:   { name: 'Motorbike', ttc: 3.5, rank: 3, refine: false },
+  bicycle:      { name: 'Bike',      ttc: 3.5, rank: 3, refine: false },
+  person:       { name: 'Person',    ttc: 2.5, rank: 2, refine: false },
+  dog:          { name: 'Dog',       ttc: 2.5, rank: 2, refine: false },
+  horse:        { name: 'Horse',     ttc: 3.0, rank: 2 },
+  cow:          { name: 'Cow',       ttc: 3.0, rank: 2 },
+  bear:         { name: 'Bear',      ttc: 3.0, rank: 2 },
+  elephant:     { name: 'Elephant',  ttc: 3.0, rank: 2 },
+  cat:          { name: 'Cat',       ttc: 2.5, rank: 2 },
+  skateboard:   { name: 'Skateboard', ttc: 2.5, rank: 2 },
+  'sports ball': { name: 'Ball',     ttc: 1.8, rank: 1 },
+  'dining table': { name: 'Table',   ttc: 1.5, rank: 1 },
+  'potted plant': { name: 'Plant',   ttc: 1.5, rank: 1 },
+  'cell phone': { name: 'Phone',     ttc: 1.5, rank: 1 },
+  tv:           { name: 'TV',        ttc: 1.5, rank: 1 },
 };
+const DEFAULT_CLASS = { ttc: 2.0, rank: 1 };
+const REFINE_MIN_SCORE = 0.3;    // classifier must be at least this sure to rename something
+// Plain names that are already what a blind walker needs; others may get a Gemini follow-up name
+const PLAIN_LABELS = new Set(['person', 'car', 'bus', 'truck', 'train', 'motorcycle', 'bicycle', 'dog']);
+
+function classInfo(label) {
+  const known = CLASSES[label];
+  if (known) return { refine: true, ...known };
+  const name = label.charAt(0).toUpperCase() + label.slice(1);
+  return { ...DEFAULT_CLASS, name, refine: true };
+}
+
+// "tiger, Panthera tigris" -> "Tiger"
+function tidyLabel(raw) {
+  const first = String(raw || '').split(',')[0].replace(/_/g, ' ').trim();
+  return first ? first.charAt(0).toUpperCase() + first.slice(1) : '';
+}
 
 export const SENSITIVITY = { low: 0.7, normal: 1.0, high: 1.4 };
 
 // ---------- Tunables ----------
-const MIN_SCORE = 0.4;          // detector confidence
-const MIN_FRAME_GAP_MS = 40;    // cap at ~25 fps to save battery
-const WINDOW_S = 0.45;          // history used to measure growth
-const MIN_SAMPLES = 4;
-const MIN_SPAN_S = 0.2;
+const MIN_SCORE_NEW = 0.45;     // confidence to start tracking something new
+const MIN_SCORE_KEEP = 0.25;    // lower bar to keep following something already tracked (less flicker)
+const MIN_FRAME_GAP_MS = 0;     // process every new camera frame: lowest latency
+const WINDOW_S = 0.4;           // history used to measure growth
+const MIN_SAMPLES = 3;
+const MIN_SPAN_S = 0.12;
 const MIN_SIZE = 0.05;          // ignore tiny boxes (sqrt of area fraction) - too noisy
-const MATCH_IOU = 0.25;         // same object across frames
-const TRACK_TIMEOUT_MS = 500;   // forget objects not seen for this long
-const CONFIRM_FRAMES = 2;       // threat must hold this many frames in a row
+const MATCH_IOU = 0.2;          // same object across frames (or close centers, see _match)
+const TRACK_TIMEOUT_MS = 600;   // keep following through brief detection dropouts
+const CONFIRM_FRAMES = 2;       // threat must hold this many frames in a row...
+const URGENT_FRACTION = 0.6;    // ...unless contact is this much sooner than the limit: then 1 frame
+const SMOOTH = 0.5;             // box smoothing for display and direction (0 = none, 1 = frozen)
+
+// Model-free looming check (catches things the detector can't name)
+const LOOM_EVERY = 2;           // run on every 2nd frame (~15 Hz) to save battery
+const LOOM_TTC = [1.4, 2.2, 1.4];  // left / center / right limits; it reads ~20% late, so set higher
+const LOOM_CONFIRM = 2;
+const LOOM_COOLDOWN_MS = 3000;
+const LOOM_DEDUPE_MS = 1500;    // skip if the detector just warned about the same thing
 const TRACK_COOLDOWN_MS = 4000; // don't repeat for the same object
 const GLOBAL_GAP_MS = 1200;     // min gap between any two alerts (unless more urgent)
 const CENTER_BAND = [0.3, 0.7]; // "in front of you" (fraction of frame width)
@@ -55,6 +97,18 @@ function iou(a, b) {
   const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
   const union = (a.x2 - a.x1) * (a.y2 - a.y1) + (b.x2 - b.x1) * (b.y2 - b.y1) - inter;
   return union > 0 ? inter / union : 0;
+}
+
+// How well a detection continues a track: overlap, or a nearby center at a similar size
+function matchScore(tr, d) {
+  const o = iou(tr.raw, d);
+  if (o >= MATCH_IOU) return o;
+  const a = tr.raw;
+  const aw = a.x2 - a.x1, ah = a.y2 - a.y1, dw = d.x2 - d.x1, dh = d.y2 - d.y1;
+  const dist = Math.hypot((a.x1 + a.x2 - d.x1 - d.x2) / 2, (a.y1 + a.y2 - d.y1 - d.y2) / 2);
+  const ratio = (dw * dh) / Math.max(aw * ah, 1e-6);
+  if (dist < 0.5 * Math.max(aw, ah) && ratio > 0.5 && ratio < 2) return 0.1;
+  return 0;
 }
 
 // Least-squares slope of y over t (robust to frame-to-frame jitter)
@@ -82,6 +136,7 @@ export class HazardWatcher {
     this.onFrame = onFrame;
     this.onStats = onStats;
     this.detector = null;
+    this.classifier = null;
     this.running = false;
     this.sensitivity = 1;
     this.tracks = [];
@@ -91,6 +146,12 @@ export class HazardWatcher {
     this.lastFrameAt = 0;
     this.stalled = false;
     this.stat = { frames: 0, ms: 0, since: 0 };
+    this.loom = new LoomingDetector();
+    this.loomHits = [0, 0, 0];
+    this.loomAlertAt = [0, 0, 0];
+    this.loomZones = null;
+    this.frameNo = 0;
+    this.lastDetectorAlert = { at: 0, direction: '' };
     this._loop = this._loop.bind(this);
   }
 
@@ -108,7 +169,10 @@ export class HazardWatcher {
       return;
     }
     if (!this.running) return; // stopped while loading
+    if (!this.classifier && !this.classifierLoading) this._loadClassifier(); // in the background
     this.tracks = [];
+    this.loom.reset();
+    this.loomHits = [0, 0, 0];
     this.stalled = false;
     this.lastFrameAt = performance.now();
     this.stat = { frames: 0, ms: 0, since: performance.now() };
@@ -129,9 +193,8 @@ export class HazardWatcher {
     const opts = (delegate) => ({
       baseOptions: { modelAssetPath: MODEL_URL, delegate },
       runningMode: 'VIDEO',
-      scoreThreshold: MIN_SCORE,
+      scoreThreshold: MIN_SCORE_KEEP,
       maxResults: 10,
-      categoryAllowlist: Object.keys(CLASSES),
     });
     try {
       return await ObjectDetector.createFromOptions(vision, opts('GPU'));
@@ -139,6 +202,52 @@ export class HazardWatcher {
       console.warn('[hazard] GPU unavailable, using CPU', e);
       return ObjectDetector.createFromOptions(vision, opts('CPU'));
     }
+  }
+
+  // Optional: if it fails, warnings just use the detector's own (coarser) names
+  async _loadClassifier() {
+    this.classifierLoading = true;
+    try {
+      const vision = await FilesetResolver.forVisionTasks(WASM_URL);
+      const opts = (delegate) => ({
+        baseOptions: { modelAssetPath: CLASSIFIER_URL, delegate },
+        runningMode: 'IMAGE',
+        maxResults: 1,
+        scoreThreshold: REFINE_MIN_SCORE,
+      });
+      try {
+        this.classifier = await ImageClassifier.createFromOptions(vision, opts('GPU'));
+      } catch {
+        this.classifier = await ImageClassifier.createFromOptions(vision, opts('CPU'));
+      }
+    } catch (e) {
+      console.warn('[hazard] fine classifier unavailable, using detector names only', e);
+    } finally {
+      this.classifierLoading = false;
+    }
+  }
+
+  // Look closer at one box (~10-30 ms): "Cat" -> "Tiger", "Bottle" -> "Water bottle"
+  _refine(tr, cls) {
+    if (!this.classifier || !cls.refine || tr.refinedName !== undefined) return tr.refinedName || cls.name;
+    tr.refinedName = null;
+    try {
+      const pad = 0.05;
+      const b = tr.raw || tr.box;
+      const roi = {
+        left: Math.max(0, b.x1 - pad), top: Math.max(0, b.y1 - pad),
+        right: Math.min(1, b.x2 + pad), bottom: Math.min(1, b.y2 + pad),
+      };
+      const res = this.classifier.classify(this.video, { regionOfInterest: roi });
+      const top = res.classifications && res.classifications[0] && res.classifications[0].categories[0];
+      if (top && top.score >= REFINE_MIN_SCORE) {
+        const name = tidyLabel(top.displayName || top.categoryName);
+        if (name && name.length <= 24) tr.refinedName = name;
+      }
+    } catch (e) {
+      console.warn('[hazard] refine failed', e);
+    }
+    return tr.refinedName || cls.name;
   }
 
   _schedule() {
@@ -157,9 +266,17 @@ export class HazardWatcher {
       this.lastProcessed = now;
       try {
         const res = this.detector.detectForVideo(v, now);
-        const ms = performance.now() - now;
+        this.frameNo += 1;
+        if (this.frameNo % LOOM_EVERY === 0) {
+          try {
+            this.loomZones = this.loom.update(this.loom.grab(v), now / 1000);
+            if (this.loomZones) this._processLoom(this.loomZones);
+          } catch (e) {
+            console.warn('[hazard] looming check failed', e);
+          }
+        }
         this._process(res.detections || [], v.videoWidth, v.videoHeight, now / 1000);
-        this._recordStats(ms);
+        this._recordStats(performance.now() - now);
         this.lastFrameAt = performance.now();
         if (this.stalled) { this.stalled = false; this.onStatus('on'); }
       } catch (e) {
@@ -194,10 +311,11 @@ export class HazardWatcher {
     const dets = [];
     for (const d of detections) {
       const cat = d.categories && d.categories[0];
-      if (!cat || !CLASSES[cat.categoryName] || cat.score < MIN_SCORE) continue;
+      if (!cat || !cat.categoryName || cat.score < MIN_SCORE_KEEP) continue;
       const b = d.boundingBox;
       dets.push({
         label: cat.categoryName,
+        score: cat.score,
         x1: b.originX / vw, y1: b.originY / vh,
         x2: (b.originX + b.width) / vw, y2: (b.originY + b.height) / vh,
       });
@@ -207,8 +325,8 @@ export class HazardWatcher {
     const pairs = [];
     this.tracks.forEach((tr, ti) => dets.forEach((d, di) => {
       if (tr.label !== d.label) return;
-      const o = iou(tr.box, d);
-      if (o >= MATCH_IOU) pairs.push([o, ti, di]);
+      const o = matchScore(tr, d);
+      if (o > 0) pairs.push([o, ti, di]);
     }));
     pairs.sort((a, b) => b[0] - a[0]);
     const usedT = new Set(), usedD = new Set();
@@ -218,8 +336,8 @@ export class HazardWatcher {
       this._addSample(this.tracks[ti], dets[di], t);
     }
     dets.forEach((d, di) => {
-      if (usedD.has(di)) return;
-      const tr = { id: this.nextId++, label: d.label, samples: [], hits: 0, alertedAt: 0 };
+      if (usedD.has(di) || d.score < MIN_SCORE_NEW) return; // weak + unknown = probably noise
+      const tr = { id: this.nextId++, label: d.label, samples: [], hits: 0, alertedAt: 0, seen: 0 };
       this._addSample(tr, d, t);
       this.tracks.push(tr);
     });
@@ -247,11 +365,11 @@ export class HazardWatcher {
       const cxAtContact = cx + vx * Math.min(ttc, 3);
       const onCourse = (x1 < CENTER_BAND[1] && x2 > CENTER_BAND[0]) || Math.abs(cxAtContact - 0.5) < 0.2;
 
-      const cls = CLASSES[tr.label];
+      const cls = classInfo(tr.label);
       const limit = cls.ttc * this.sensitivity;
       if (onCourse && ttc < limit) {
         tr.hits += 1;
-        tr.threat = tr.hits >= CONFIRM_FRAMES;
+        tr.threat = tr.hits >= CONFIRM_FRAMES || ttc < URGENT_FRACTION * limit;
       } else {
         tr.hits = 0;
       }
@@ -261,7 +379,7 @@ export class HazardWatcher {
       }
     }
 
-    if (this.onFrame) this.onFrame({ tracks: this.tracks, vw, vh });
+    if (this.onFrame) this.onFrame({ tracks: this.tracks, vw, vh, loom: this.loomZones });
 
     // 4. Decide whether to alert
     if (!best) return;
@@ -275,14 +393,63 @@ export class HazardWatcher {
     this.lastAlert = { at: nowMs, rank: cls.rank };
     const cx = tr.box.cx;
     const direction = cx < 0.38 ? 'left' : cx > 0.62 ? 'right' : 'ahead';
-    this.onAlert({ label: tr.label, name: cls.name, direction, ttc: Math.round(ttc * 10) / 10, rank: cls.rank });
+    const name = this._refine(tr, cls);
+    this.lastDetectorAlert = { at: nowMs, direction };
+    this.onAlert({
+      label: tr.label, name, direction, ttc: Math.round(ttc * 10) / 10, rank: cls.rank,
+      // Not a plain name and the fine classifier didn't help: ask Gemini for the exact name
+      needsName: !PLAIN_LABELS.has(tr.label) && !tr.refinedName,
+      region: { x1: tr.raw.x1, y1: tr.raw.y1, x2: tr.raw.x2, y2: tr.raw.y2 },
+    });
+  }
+
+  // Something is expanding fast in a zone, whatever it is: warn first, name it after
+  _processLoom(zones) {
+    const nowMs = performance.now();
+    let best = null;
+    zones.forEach((z, i) => {
+      const limit = LOOM_TTC[i] * this.sensitivity;
+      z.limit = limit;
+      if (z.ttc < limit) {
+        this.loomHits[i] += 1;
+        z.threat = this.loomHits[i] >= LOOM_CONFIRM || z.ttc < URGENT_FRACTION * limit;
+      } else {
+        this.loomHits[i] = 0;
+        z.threat = false;
+      }
+      if (z.threat && (!best || z.ttc / limit < best.z.ttc / best.limit)) best = { z, i, limit };
+    });
+    if (!best) return;
+    const { z, i } = best;
+    const direction = ['left', 'ahead', 'right'][i];
+    if (nowMs - this.loomAlertAt[i] < LOOM_COOLDOWN_MS) return;
+    if (nowMs - this.lastDetectorAlert.at < LOOM_DEDUPE_MS) return; // detector already named it
+    const RANK = 2;
+    if (nowMs - this.lastAlert.at < GLOBAL_GAP_MS && RANK <= this.lastAlert.rank) return;
+    this.loomAlertAt[i] = nowMs;
+    this.lastAlert = { at: nowMs, rank: RANK };
+    const r = 0.22; // region around the expanding spot, for naming
+    this.onAlert({
+      label: 'unknown', name: 'Something', direction, ttc: Math.round(z.ttc * 10) / 10, rank: RANK,
+      needsName: true,
+      region: { x1: Math.max(0, z.cx - r), y1: Math.max(0, z.cy - r), x2: Math.min(1, z.cx + r), y2: Math.min(1, z.cy + r) },
+    });
   }
 
   _addSample(tr, d, t) {
     const w = d.x2 - d.x1, h = d.y2 - d.y1;
     const size = Math.sqrt(Math.max(w * h, 1e-6));
+    tr.raw = { x1: d.x1, y1: d.y1, x2: d.x2, y2: d.y2 };
+    // Smoothed box for drawing and direction (growth uses the raw sizes, fitted over time)
+    const p = tr.box;
+    const mix = (a, b) => (p ? SMOOTH * a + (1 - SMOOTH) * b : b);
+    const box = p
+      ? { x1: mix(p.x1, d.x1), y1: mix(p.y1, d.y1), x2: mix(p.x2, d.x2), y2: mix(p.y2, d.y2) }
+      : { x1: d.x1, y1: d.y1, x2: d.x2, y2: d.y2 };
+    box.cx = (box.x1 + box.x2) / 2;
+    tr.box = box;
+    tr.seen = (tr.seen || 0) + 1;
     const cx = (d.x1 + d.x2) / 2;
-    tr.box = { ...d, cx };
     tr.lastSeen = t;
     tr.samples.push({ t, size, ls: Math.log(size), cx });
     while (tr.samples.length && t - tr.samples[0].t > WINDOW_S) tr.samples.shift();

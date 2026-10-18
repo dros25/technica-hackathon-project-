@@ -8,3 +8,4 @@ node_modules/
 frontend/build/
 backend/.tts_cache/
 firmware/guardian/arduino_secrets.h
+firmware/guardian/secrets.h

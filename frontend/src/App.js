@@ -19,6 +19,7 @@ const LIVE_RECHECK_MS = 20000;   // re-check even an unchanged scene this often
 const HOVER_REPEAT_MS = 1500;
 const DOUBLE_TAP_MS = 500;       // two taps on the same control within this = use it    // don't repeat the same hover label too quickly
 const QUIET_AFTER_HAZARD_MS = 3000; // live narration waits this long after a hazard alert
+const WRIST_WAIT_MS = 10000;        // live narration holds off while a wrist description is coming
 
 // Spoken the moment something happens, so they're generated ahead of time in the chosen voice
 const HAZARD_NAMES = ['Car', 'Bus', 'Truck', 'Motorbike', 'Bike', 'Person', 'Dog'];
@@ -42,6 +43,8 @@ const UI_PHRASES = [
   'Tap mode. Describe the scene only when I ask',
   'Live guide. Speak up whenever something new appears',
   'Wearable display updated.',
+  'Wearable connected over Wi-Fi.', 'Wearable connected by cable.', 'Wearable disconnected.',
+  'Looking where you are pointing…',
 ];
 
 function loadSetting(key, fallback) {
@@ -169,7 +172,7 @@ export default function App() {
   const [caption, setCaption] = useState("Tap the camera view to hear what's ahead of you.");
   const [busy, setBusy] = useState(false);
   const [online, setOnline] = useState(null);
-  const [wearable, setWearable] = useState({ connected: true, mock: false });
+  const [wearable, setWearable] = useState({ connected: true, mock: false, link: null });
   const [fall, setFall] = useState(null); // null | 'pending' (countdown) | 'alarm'
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [fallDetection, setFallDetection] = useState(() => loadSetting('fallDetection', true));
@@ -199,6 +202,7 @@ export default function App() {
   const watcherRef = useRef(null);
   const audioCtxRef = useRef(null);
   const lastHazardRef = useRef(0);
+  const wristPendingRef = useRef(0); // when a wrist ("point to ask") description was requested
   const showBoxesRef = useRef(showBoxes);
   const audioRef = useRef(null);
   const busyRef = useRef(false);
@@ -609,6 +613,43 @@ export default function App() {
     const text = a.direction === 'ahead' ? `${a.name} ahead!` : `${a.name}, ${a.direction}!`;
     setCaption(text);
     speak(text, 'urgent');
+    if (a.needsName) identifyHazard(a, text);
+  };
+
+  // Warn first, name it a moment later: Gemini looks at just the crop ("It's a shopping cart.")
+  const identifyHazard = async (a, warning) => {
+    const at = Date.now();
+    const video = videoRef.current;
+    if (!video || !video.videoWidth || !a.region) return;
+    const { x1, y1, x2, y2 } = a.region;
+    const sx = x1 * video.videoWidth, sy = y1 * video.videoHeight;
+    const sw = Math.max(16, (x2 - x1) * video.videoWidth), sh = Math.max(16, (y2 - y1) * video.videoHeight);
+    const scale = Math.min(1, 384 / Math.max(sw, sh));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(sw * scale);
+    canvas.height = Math.round(sh * scale);
+    canvas.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    try {
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.75));
+      const form = new FormData();
+      form.append('image', blob, 'crop.jpg');
+      const res = await api('/identify', { method: 'POST', body: form });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.name || Date.now() - at > 6000 || fallRef.current) return; // too late to matter
+      const article = /^[aeiou]/i.test(data.name) ? 'an' : 'a';
+      setCaption(`${warning} It's ${article} ${data.name}.`);
+      speakWhenFree(`It's ${article} ${data.name}.`);
+    } catch { /* naming is a bonus; the warning already went out */ }
+  };
+
+  // Say this right after the current warning finishes (never cut the warning off)
+  const speakWhenFree = (text) => {
+    const start = Date.now();
+    const tick = () => {
+      if (speechRef.current.priority === 'urgent' && Date.now() - start < 3000) { setTimeout(tick, 80); return; }
+      speak(text, 'urgent');
+    };
+    tick();
   };
 
   hazardHandlersRef.current.onStatus = (state, detail) => {
@@ -645,15 +686,29 @@ export default function App() {
     const scale = Math.max(cw / vw, ch / vh);
     const dx = (cw - vw * scale) / 2, dy = (ch - vh * scale) / 2;
     ctx.font = '700 14px Atkinson Hyperlegible, sans-serif';
+    // Model-free looming check: ring where something is expanding fast
+    if (frame.loom) {
+      frame.loom.forEach((z) => {
+        if (!z.threat) return;
+        const lx = z.cx * vw * scale + dx, ly = z.cy * vh * scale + dy;
+        ctx.strokeStyle = '#ffd23f';
+        ctx.lineWidth = 5;
+        ctx.setLineDash([10, 8]);
+        ctx.beginPath();
+        ctx.arc(lx, ly, Math.min(cw, ch) * 0.16, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      });
+    }
     for (const tr of tracks) {
-      if (!tr.box) continue;
+      if (!tr.box || (tr.seen || 0) < 2) continue; // skip one-frame blips
       const x = tr.box.x1 * vw * scale + dx, y = tr.box.y1 * vh * scale + dy;
       const w = (tr.box.x2 - tr.box.x1) * vw * scale, h = (tr.box.y2 - tr.box.y1) * vh * scale;
       const color = tr.threat ? '#ffd23f' : '#4ff0e2';
       ctx.strokeStyle = color;
       ctx.lineWidth = tr.threat ? 5 : 3;
       ctx.strokeRect(x, y, w, h);
-      const label = tr.label + (tr.ttc ? ` ${tr.ttc.toFixed(1)}s` : '');
+      const label = (tr.refinedName || tr.label) + (tr.ttc ? ` ${tr.ttc.toFixed(1)}s` : '');
       ctx.fillStyle = color;
       ctx.fillRect(x, y - 20, ctx.measureText(label).width + 10, 20);
       ctx.fillStyle = '#031b2e';
@@ -719,6 +774,7 @@ export default function App() {
     const timer = setInterval(() => {
       if (busyRef.current || fallRef.current || speechRef.current.priority || isPlayingAudio()) return;
       if (Date.now() - lastHazardRef.current < QUIET_AFTER_HAZARD_MS) return;
+      if (Date.now() - wristPendingRef.current < WRIST_WAIT_MS) return; // don't talk over the answer
       // Wearable camera: the server checks whether the scene changed before calling the AI
       if (cameraSourceRef.current === 'wearable') { describeRef.current('live'); return; }
       const sig = frameSignature(videoRef.current);
@@ -805,7 +861,7 @@ export default function App() {
         const res = await api('/events');
         const data = await res.json();
         setOnline(true);
-        setWearable({ connected: data.connected !== false, mock: !!data.mock });
+        setWearable({ connected: data.connected !== false, mock: !!data.mock, link: data.link || null });
         // Server or wearable restarted with a different setting: put the user's choice back
         if (typeof data.fall_detection === 'boolean' && data.fall_detection !== fallDetectionRef.current) {
           sendFallDetection(fallDetectionRef.current);
@@ -813,6 +869,19 @@ export default function App() {
         (data.events || []).forEach((ev) => {
           if (ev.type === 'button') {
             describeRef.current('tap');
+          } else if (ev.type === 'wrist_looking') {
+            // Wearable button + webcam: the laptop is describing what the hand points at
+            wristPendingRef.current = Date.now();
+            if (navigator.vibrate) navigator.vibrate(60);
+            setCaption('Looking where you are pointing…');
+          } else if (ev.type === 'wrist_description') {
+            wristPendingRef.current = 0;
+            setCaption(ev.text);
+            speak(ev.text); // 'high': never cuts off a hazard warning
+          } else if (ev.type === 'wrist_error') {
+            wristPendingRef.current = 0;
+            setCaption(`${ev.message}${ev.detail ? ` (${ev.detail})` : ''}`);
+            speak(ev.message);
           } else if (ev.type === 'fall_pending') {
             startCountdown(ev.seconds || 30);
           } else if (ev.type === 'fall') {
@@ -828,6 +897,10 @@ export default function App() {
           } else if (ev.type === 'disconnected') {
             setCaption('Wearable disconnected. Trying to reconnect.');
             speak('Wearable disconnected.');
+          } else if (ev.type === 'connected') {
+            const how = ev.link === 'wifi' ? 'over Wi-Fi' : 'by cable';
+            setCaption(`Wearable connected ${how}.`);
+            speak(`Wearable connected ${how}.`);
           } else if (ev.type === 'reconnected') {
             setCaption('Wearable reconnected.');
             speak('Wearable reconnected.');

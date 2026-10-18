@@ -11,7 +11,8 @@ Run:   cd backend && python Main.py
        MOCK_VISION=1             (optional - fake descriptions, uses no API quota)
        GEMINI_MODELS=a,b         (optional - exact model fallback order)
        OPENROUTER_MODEL=...      (optional - backup model on OpenRouter)
-       CAMERA_INDEX=1            (optional - which webcam is the wearable; default tries 1, 2, then 0)
+       WRIST_CAMERA=1            (optional - USB webcam index for "point to ask" and the Wearable camera
+                                  view; default 1; "off" to disable; CAMERA_INDEX works too)
        ELEVEN_VOICE_ID=...       (optional - default voice; the phone can pick another)
 """
 
@@ -41,9 +42,26 @@ LIVE_PROMPT = (
     "Otherwise reply with ONE short sentence under 15 words, hazards first "
     "(obstacles, steps, doors, people, vehicles) with direction. No preamble."
 )
+WRIST_PROMPT = (
+    "A blind person is pointing their hand-mounted camera at something and asking what it is. "
+    "In 1-2 short sentences, say what the main thing in the middle of the picture is. "
+    "If there is readable text (signs, labels, screens, doors), read it out. "
+    "Mention anything that matters for safety. No preamble."
+)
+NAME_PROMPT = (
+    "Name the main object in this picture in 1 to 4 words, as specifically as you can "
+    "(for example: shopping cart, tiger, water bottle, electric scooter). "
+    "Reply with only the name, no punctuation. If you can't tell, reply: unknown"
+)
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 ELEVEN_VOICE_ID = os.getenv("ELEVEN_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")
 ELEVEN_MODEL = os.getenv("ELEVEN_MODEL", "eleven_flash_v2_5")  # fast + uses fewer credits
+
+def key_tag(name):
+    """Last 4 characters of a key, so you can tell WHOSE key a laptop is using without exposing it."""
+    value = (os.getenv(name) or "").strip()
+    return f"...{value[-4:]}" if len(value) >= 8 else None
+
 
 # ---------- AI clients (each one is optional so the server still boots) ----------
 gemini_client = None
@@ -52,7 +70,7 @@ if os.getenv("GEMINI_API_KEY"):
         from google import genai
         from google.genai import types as genai_types
         gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-        print(f"[ai] Gemini ready ({GEMINI_MODEL})")
+        print(f"[ai] Gemini ready ({GEMINI_MODEL}, key {key_tag('GEMINI_API_KEY')})")
     except Exception as e:
         print(f"[ai] Gemini unavailable: {e}")
 
@@ -62,7 +80,7 @@ if os.getenv("OPENROUTER_API_KEY"):
         from openai import OpenAI
         openrouter_client = OpenAI(base_url="https://openrouter.ai/api/v1",
                                    api_key=os.getenv("OPENROUTER_API_KEY"))
-        print("[ai] OpenRouter fallback ready")
+        print(f"[ai] OpenRouter fallback ready (key {key_tag('OPENROUTER_API_KEY')})")
     except Exception as e:
         print(f"[ai] OpenRouter unavailable: {e}")
 
@@ -71,7 +89,7 @@ if os.getenv("ELEVENLABS_API_KEY"):
     try:
         from elevenlabs.client import ElevenLabs
         eleven_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
-        print("[ai] ElevenLabs ready")
+        print(f"[ai] ElevenLabs ready (key {key_tag('ELEVENLABS_API_KEY')})")
     except Exception as e:
         print(f"[ai] ElevenLabs unavailable: {e}")
 
@@ -141,18 +159,40 @@ def load_hardware():
         return MockHardware()
     try:
         from hardware import Hardware  # backend/hardware.py
-        hw_real = Hardware()  # USB if plugged in, otherwise finds it on WiFi
+        # Never fails: USB if plugged in, otherwise finds it on Wi-Fi; keeps looking if neither yet
+        hw_real = Hardware()
         hw_real.is_mock = False
         return hw_real
-    except Exception as e:  # ImportError, no Arduino found, port busy...
-        print(f"[hardware] real hardware unavailable ({e}), using MOCK mode")
+    except Exception as e:  # e.g. pyserial not installed
+        print(f"[hardware] wearable bridge unavailable ({e}), using MOCK mode")
         return MockHardware()
 
 
 hw = load_hardware()
 
 from camera import Webcam, difference as camera_difference  # noqa: E402  (backend/camera.py)
-webcam = Webcam()  # the wearable's USB webcam; opens the first time it's used
+
+# One USB webcam for both "point to ask" (the button) and the app's Wearable camera view
+webcam = Webcam()
+wrist = webcam
+
+# Events the server itself creates (wrist descriptions, simulated tests), handed to the phone
+_server_events = []
+_events_lock = threading.Lock()
+_wrist_busy = False
+
+
+def push_event(event):
+    event.setdefault("time", time.time())
+    with _events_lock:
+        _server_events.append(event)
+
+
+def drain_server_events():
+    global _server_events
+    with _events_lock:
+        out, _server_events = _server_events, []
+    return out
 
 
 # ---------- AI helpers ----------
@@ -247,6 +287,38 @@ def describe_image(image_bytes, mime="image/jpeg", prompt=NARRATE_PROMPT):
         raise RuntimeError("The AI's free daily limit is used up. Add billing or another API key. ("
                            + "; ".join(errors) + ")")
     raise RuntimeError("No vision model worked: " + "; ".join(errors or ["no API keys set"]))
+
+
+def _describe_wrist():
+    global _wrist_busy
+    try:
+        jpeg = wrist.snapshot_jpeg()
+        if not jpeg:
+            push_event({"type": "wrist_error", "message": "The wrist camera isn't sending pictures."})
+            return
+        start = time.time()
+        text, source = describe_image(jpeg, "image/jpeg", WRIST_PROMPT)
+        print(f"[wrist] {source} in {time.time() - start:.1f}s: {text}")
+        push_event({"type": "wrist_description", "text": text, "source": source})
+    except Exception as e:
+        print(f"[wrist] failed: {e}")
+        limit = "daily limit" in str(e).lower()
+        push_event({"type": "wrist_error", "detail": str(e)[:300],
+                    "message": "The scene describer has reached its daily limit." if limit
+                    else "Couldn't describe what you're pointing at."})
+    finally:
+        _wrist_busy = False
+
+
+def start_wrist_describe():
+    """Describe the wrist camera's view in the background. False if one is already running."""
+    global _wrist_busy
+    with _events_lock:
+        if _wrist_busy:
+            return False
+        _wrist_busy = True
+    threading.Thread(target=_describe_wrist, daemon=True).start()
+    return True
 
 
 # Every phrase is saved the first time it's spoken, so repeated hover labels and alerts
@@ -363,16 +435,25 @@ app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10 MB images max
 def health():
     return jsonify({
         "status": "SightSea backend online",
-        "hardware": "mock" if getattr(hw, "is_mock", False) else f"arduino ({getattr(hw, 'transport', None) or 'reconnecting'})",
+        "hardware": "mock" if getattr(hw, "is_mock", False) else f"arduino ({getattr(hw, 'link', None) or 'not connected'})",
+        "wearable": {
+            "connected": getattr(hw, "connected", False),
+            "link": getattr(hw, "link", None),           # "usb", "wifi" or None
+            "wifi_ip": getattr(hw, "wifi_ip", None),
+            "light": hw.light,
+        },
         "gemini": bool(gemini_client),
         "elevenlabs": bool(eleven_client),
+        # Which keys THIS laptop loaded (last 4 characters only)
+        "keys": {
+            "gemini": key_tag("GEMINI_API_KEY") if gemini_client else None,
+            "elevenlabs": key_tag("ELEVENLABS_API_KEY") if eleven_client else None,
+            "openrouter": key_tag("OPENROUTER_API_KEY") if openrouter_client else None,
+        },
+        "mock_vision": MOCK_VISION,
         "frontend_build": bool(FRONTEND_BUILD),
+        "webcam": webcam.status(),
     })
-
-
-LIVE_CHANGE = 12        # average pixel change (0-255) that counts as "the scene changed"
-LIVE_RECHECK_S = 20     # re-check an unchanged scene this often anyway
-_wearable_live = {"sig": None, "at": 0.0}
 
 
 @app.route("/narrate", methods=["POST"])
@@ -427,6 +508,28 @@ def narrate():
     return jsonify({"text": text, "audio": audio, "source": source})
 
 
+@app.route("/identify", methods=["POST"])
+def identify():
+    """Fast follow-up name for a hazard warning: a small crop in, a few words out."""
+    image = request.files.get("image")
+    image_bytes = image.read() if image else b""
+    if not image_bytes:
+        return jsonify({"error": "no image"}), 400
+    try:
+        start = time.time()
+        if MOCK_VISION:
+            name, source = "test object", "mock"
+        else:
+            name, source = describe_image(image_bytes, image.mimetype or "image/jpeg", NAME_PROMPT)
+        name = re.sub(r"[^\w\s'-]", "", name).strip().lower()[:40]
+        print(f"[identify] {source} in {time.time() - start:.1f}s: {name}")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+    if not name or name == "unknown":
+        return jsonify({"name": None, "source": source})
+    return jsonify({"name": name, "source": source})
+
+
 @app.route("/speak", methods=["POST"])
 def speak_route():
     data = request.get_json(silent=True) or {}
@@ -474,13 +577,44 @@ def camera_stream():
 
 @app.route("/events", methods=["GET"])
 def events():
+    out = []
+    for ev in hw.get_events():
+        # With the webcam plugged in, the wearable button means "what am I pointing at?".
+        # Without one, the phone handles "button" as before (describe from its camera).
+        if ev.get("type") == "button" and wrist.available:
+            if start_wrist_describe():
+                out.append({"type": "wrist_looking", "time": ev.get("time", time.time())})
+        else:
+            out.append(ev)
+    out.extend(drain_server_events())
     return jsonify({
-        "events": hw.get_events(),
+        "events": out,
         "light": hw.light,
         "connected": getattr(hw, "connected", True),
+        "link": getattr(hw, "link", None),
         "mock": getattr(hw, "is_mock", False),
         "fall_detection": getattr(hw, "fall_detection", True),
     })
+
+
+@app.route("/wrist/describe", methods=["POST", "GET"])
+def wrist_describe():
+    """Same as pressing the wearable button with the webcam plugged in (handy for testing)."""
+    if not wrist.available:
+        return jsonify({"error": "wrist camera not available - check WRIST_CAMERA in .env"}), 503
+    if not start_wrist_describe():
+        return jsonify({"status": "busy"}), 409
+    push_event({"type": "wrist_looking"})
+    return jsonify({"status": "looking"})
+
+
+@app.route("/wrist/snapshot.jpg")
+def wrist_snapshot():
+    """Open in a browser to check what the wrist camera sees (and that you picked the right one)."""
+    jpeg = wrist.snapshot_jpeg()
+    if not jpeg:
+        return jsonify({"error": "wrist camera not available - check WRIST_CAMERA in .env"}), 503
+    return Response(jpeg, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @app.route("/fall-detection", methods=["POST"])
@@ -501,6 +635,8 @@ def lcd():
 def cancel():
     """'I'm okay' from the phone: stops the fall alarm on the wearable too."""
     hw.cancel_fall()
+    if _sim_fall_timer:  # a simulated test countdown (no wearable connected)
+        _sim_fall_timer.cancel()
     return jsonify({"status": "success"})
 
 
@@ -511,20 +647,39 @@ def alarm():
     return jsonify({"status": "success", "on": on})
 
 
+_sim_fall_timer = None
+
+
 @app.route("/test/<event_type>", methods=["POST", "GET"])
 def test_event(event_type):
-    """Fake events for testing the frontend: /test/fall, /test/button, /test/cancel, /test/dark"""
+    """Fake events for testing the frontend: /test/fall, /test/button, /test/cancel, /test/dark.
+    With the wearable connected, fall/cancel go to the real device; otherwise they're simulated."""
+    global _sim_fall_timer
     if event_type not in ("fall", "button", "cancel", "dark"):
         return jsonify({"error": "use fall, button, cancel or dark"}), 400
+    mock = getattr(hw, "is_mock", False)
+    live = getattr(hw, "connected", False) and not mock
     if event_type == "fall":
-        hw.test_fall()  # starts the 30 s countdown (real Arduino or mock), alarm if not cancelled
+        if live or mock:
+            hw.test_fall()  # countdown on the device (or the mock), alarm if not cancelled
+        else:
+            seconds = int(os.getenv("MOCK_COUNTDOWN", "30"))
+            push_event({"type": "fall_pending", "seconds": seconds})
+            if _sim_fall_timer:
+                _sim_fall_timer.cancel()
+            _sim_fall_timer = threading.Timer(seconds, lambda: push_event({"type": "fall"}))
+            _sim_fall_timer.daemon = True
+            _sim_fall_timer.start()
     elif event_type == "cancel":
-        hw.cancel_fall()
-    elif getattr(hw, "is_mock", False):
-        hw.inject(event_type)
+        if live or mock:
+            hw.cancel_fall()
+        else:
+            if _sim_fall_timer:
+                _sim_fall_timer.cancel()
+            push_event({"type": "cancel"})
     else:
-        return jsonify({"error": "with real hardware only /test/fall works - press the real button"}), 400
-    return jsonify({"status": "sent", "event": event_type})
+        hw.inject(event_type)
+    return jsonify({"status": "sent", "event": event_type, "wearable": "live" if live else "simulated"})
 
 
 # React app (only when built). API routes above take priority.

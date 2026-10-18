@@ -10,7 +10,7 @@ Use from the Flask server:
     hw.get_events()  -> [{"type": "button"}, {"type": "fall_pending", "seconds": 30},
                          {"type": "fall"} (alarm), {"type": "cancel"}, {"type": "dark"}, ...]
     hw.set_fall_detection(True/False), hw.cancel_fall()
-                        also "disconnected" / "reconnected" (auto-reconnects if unplugged)
+                        also "disconnected" / "connected" with "link": "usb"|"wifi" (auto-reconnects)
     hw.light         -> latest light reading (0-1023, low = dark) or None
     hw.set_lcd("Low vision", "Thanks for help")
     hw.alarm(True)
@@ -179,19 +179,34 @@ class Hardware:
         self._write_lock = threading.Lock()
         self._last_dark_alert = 0.0
         self._was_dark = False
-        self.link = self._open_any()  # raises if neither USB nor WiFi finds it
-        self.connected = True
         self._last_line = time.time()
+        # Never fails: if the Arduino isn't there yet, keep looking (USB and Wi-Fi) in the background,
+        # so the wearable can be switched on after the server starts.
+        try:
+            self._link = self._open_any()
+            self.connected = True
+            print(f"[hardware] connected over {self._link.kind.upper()} ({self._link.name})")
+            self._push({"type": "connected", "link": self._link.kind})
+        except Exception as e:
+            self._link = None
+            self.connected = False
+            print(f"[hardware] wearable not found yet ({e}); will keep looking")
         threading.Thread(target=self._read_loop, daemon=True).start()
-        print(f"[hardware] connected over {self.link.kind.upper()} ({self.link.name})")
 
     @property
-    def transport(self):
-        return self.link.kind if self.connected else None
+    def link(self):
+        """'usb', 'wifi', or None while disconnected."""
+        return self._link.kind if (self.connected and self._link) else None
+
+    transport = link
 
     @property
     def port(self):
-        return self.link.name
+        return self._link.name if self._link else None
+
+    @property
+    def wifi_ip(self):
+        return self._link.name.replace("WiFi ", "") if self.link == "wifi" else None
 
     def _open_any(self):
         errors = []
@@ -215,15 +230,17 @@ class Hardware:
 
     # ---------- reading ----------
     def _read_loop(self):
+        if self._link is None:
+            self._reconnect(announce=False)
         while True:
             try:
-                raw = self.link.readline()
+                raw = self._link.readline()
                 if not raw:
                     if time.time() - self._last_line > SILENCE_S:
                         raise OSError(f"no data for {SILENCE_S} s")
                     continue
             except (serial.SerialException, OSError) as e:
-                print(f"[hardware] lost connection ({self.link.name}): {e}")
+                print(f"[hardware] lost connection ({self._link.name}): {e}")
                 self._reconnect()
                 continue
             self._last_line = time.time()
@@ -231,11 +248,13 @@ class Hardware:
             if line:
                 self._handle_line(line)
 
-    def _reconnect(self):
+    def _reconnect(self, announce=True):
         """Keep retrying USB and WiFi until the Arduino is back."""
         self.connected = False
-        self._push({"type": "disconnected"})
-        self.link.close()
+        if announce:
+            self._push({"type": "disconnected"})
+        if self._link:
+            self._link.close()
         last_note = 0.0
         while True:
             time.sleep(2)
@@ -247,11 +266,11 @@ class Hardware:
                     last_note = time.time()
                 continue
             with self._write_lock:
-                self.link = link
+                self._link = link
             self._last_line = time.time()
             self.connected = True
-            print(f"[hardware] reconnected over {link.kind.upper()} ({link.name})")
-            self._push({"type": "reconnected"})
+            print(f"[hardware] connected over {link.kind.upper()} ({link.name})")
+            self._push({"type": "connected", "link": link.kind})
             if self._lcd_lines:
                 self.set_lcd(*self._lcd_lines)  # restore the user's message
             if not self.fall_detection:
@@ -295,6 +314,13 @@ class Hardware:
         event["time"] = time.time()
         self._events.put(event)
 
+    def inject(self, event_type, value=None):
+        """Fake an event for testing the app (/test/<event>)."""
+        ev = {"type": event_type}
+        if value is not None:
+            ev["value"] = value
+        self._push(ev)
+
     def get_events(self):
         """Return and clear all pending events (one consumer only)."""
         out = []
@@ -311,7 +337,7 @@ class Hardware:
             return False
         try:
             with self._write_lock:
-                self.link.write((cmd.strip() + "\n").encode())
+                self._link.write((cmd.strip() + "\n").encode())
             return True
         except (serial.SerialException, OSError) as e:
             print(f"[hardware] write failed: {e}")
