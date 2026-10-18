@@ -25,7 +25,14 @@ ngrok http 5000          # in a second terminal
 
 On the phone: open the https link, tap **Visit Site** on ngrok's notice, allow the camera, then **tap the screen once** so sound works. Use Chrome where possible.
 
-**Touch controls:** tap a control once to hear what it is, **double-tap** to use it (like VoiceOver). The fall alarm's "I'm okay" always works on one tap. Mouse and keyboard work normally. Turn it off in Settings (VoiceOver/TalkBack users should).
+**Touch controls:** tap a control once to hear what it is, **double-tap** to use it (like VoiceOver). This includes the camera view: one tap says "Tap to describe…", the **second** tap takes the picture. The fall alarm's "I'm okay" always works on one tap. Mouse and keyboard work normally. Turn it off in Settings (VoiceOver/TalkBack users should); then one tap on the camera view describes right away.
+
+**ngrok free plan limits** (per ngrok *account*, not per laptop): **20,000 requests and 1 GB of data a month**. Check usage on the ngrok dashboard. What uses them:
+- Each open SightSea page waits on `/events` (long poll): about **3 requests a minute** idle (it was 60 a minute before the long poll). Close tabs and phones you're not using.
+- Each description: 1 request (plus 1 for a phrase spoken in the natural voice for the first time).
+- The **Wearable camera live view** (Settings > Camera > Wearable) streams pictures through ngrok: up to ~0.5 GB an hour. Keep the camera on **Phone** unless you need the wrist camera.
+- The AI models for hazard watch load from Google's servers, not through ngrok.
+- One account nearly ran out (19.8k requests, Sun ~3:30 am) before the long poll; the backend now runs on the other teammate's ngrok token. Backup if ngrok runs out: a Cloudflare quick tunnel (`winget install Cloudflare.cloudflared`, then `cloudflared tunnel --url http://localhost:5000`): free, no account, no request limit, no "Visit Site" page, but a new link every start.
 
 ---
 
@@ -45,17 +52,39 @@ On the phone: open the https link, tap **Visit Site** on ngrok's notice, allow t
 Phone (React web app, chest-mounted)            Laptop (Flask, backend/Main.py)          Arduino wearable
 - camera + hazard watch (ON-DEVICE, no network) - /narrate  Gemini scene descriptions    - fall detection (accelerometer)
 - speech: hazard > answers > narration (natural ElevenLabs voice, cached; phone voice fallback)          - /identify Gemini names an object        - light sensor, LCD, buzzer, button
-- polls /events every 1 s                       - /events   wearable + wrist events       - USB cable OR Wi-Fi (phone hotspot)
+- waits on /events (long poll, see below)       - /events   wearable + wrist events       - USB cable OR Wi-Fi (phone hotspot)
                                                 - wrist webcam (OpenCV)
                                                 - serves the built app on port 5000
 ```
+
+### How a description happens, and where the time goes
+**Phone tap** (double-tap the camera view) or **wearable button press**:
+1. Button only: the board waits 0.4 s to make sure it isn't a double press, then sends `BUTTON` over USB/Wi-Fi to the laptop.
+2. Button only: the phone hears about it through the long poll (~0.1-0.2 s, see below).
+3. The phone grabs a camera frame (640 px JPEG for a tap, 480 px lighter JPEG for Live guide checks) and uploads it to `/narrate` through ngrok. With the wrist webcam plugged in, the laptop grabs the frame itself instead (no upload) and the answer comes back as a `wrist_description` event.
+4. The laptop asks Gemini (no "thinking" step, short length cap, for speed; it falls back per model to lower thinking, then a plain call, if a model rejects those settings).
+5. The laptop asks ElevenLabs for the audio, **after** Gemini finishes, and sends text + audio back together.
+6. The phone plays it.
+
+Steps 4 and 5 are most of the wait. The backend window prints both: `[narrate] <model name> in 1.4s: ...` (the Gemini time) then `[narrate] voice in 0.9s`. Ideas not done yet: speak with the phone voice as soon as the text arrives (or stream the ElevenLabs audio), pre-load common phrases in the natural voice at startup, shorten the board's double-press wait to 0.3 s, and one-tap for the camera view (decided against for now).
+
+### Wearable events reach the phone by long poll (`/events?since=N&wait=20`)
+A web page can only ask, the server can only answer, so the laptop can't push a button press to the phone by itself. Before: the phone asked "anything new?" every second (0-1 s delay, 3,600 requests an hour, almost all "no"). Now: the phone asks once and the laptop **holds the request** until something happens (button, fall, dark, wearable connected/disconnected) or 20 s pass, then answers; the phone asks again right away (after 2 s if the server can't be reached). Measured: a button press reached the phone in ~200 ms, and 2 requests in 45 s idle. Events are numbered (`since=N`), so nothing is missed between requests. Flask runs `threaded=True` so a held request doesn't block descriptions. Old pages without `wait` still get an immediate answer.
+
+### Voices
+Descriptions use the chosen ElevenLabs voice (cached per phrase on the phone and in `backend/.tts_cache`). The phone's own voice is used when the natural voice isn't ready: hazard warnings and button labels the first time a phrase is said, a slow (>7 s) or failed ElevenLabs request, ElevenLabs out of credits, or audio playback blocked. The phone voice now matches the ElevenLabs voice's **gender**, so it no longer flips between a man and a woman (it is still a different-sounding voice).
 
 ### Hazard watch (`frontend/src/hazard.js`, `frontend/src/looming.js`)
 Runs only in **Live guide** mode (Settings toggle can turn it off). Two detectors run together on the phone:
 1. **Object detector** (MediaPipe EfficientDet-Lite0, 80 categories). Tracks boxes; time-to-contact = how fast a box grows. Known objects get named on-device; a second model (EfficientNet-Lite0, 1,000 categories) refines the name once per warning ("Cat" becomes "Tiger").
 2. **Looming detector** (model-free). Measures expansion of image patches on a 160x120 copy of the frame, so it catches **anything** approaching, even unrecognized objects. Requires expansion in both directions, so turning, swaying and objects sliding past don't trigger it.
 
-On a warning: instant beep + vibration + short speech ("Bike ahead!", "Something, right!"). If the object wasn't named well, the crop goes to `/identify` and Gemini's name is spoken right after ("It's a shopping cart.").
+Three kinds of alert:
+- **Fast collision warning** (something coming at you quickly): instant beep + vibration + short speech ("Bike ahead!", "Something, right!"). If the object wasn't named well, the crop goes to `/identify` and Gemini's name is spoken right after ("It's a shopping cart.").
+- **In your path** (you're walking toward a still object): goes by **distance, not speed**. "Chair ahead, a few steps." (~4 m) then, once it's about a step away, "Chair right in front of you." (~1.5 m). Standing still or passing it off to the side: nothing.
+- **Heads-up** (a person or vehicle moving toward you, not urgent): "Person is coming toward you, on your left."
+
+The Live guide's Gemini check (every few seconds) follows the same rule: only things in the path within ~4 steps, always with the number of steps, and spoken again only when closer.
 
 Tuning lives in the "Tunables" blocks at the top of both files (time-to-contact limits per class, confirmation frames, looming thresholds). The Settings sensitivity (low/normal/high) scales all limits.
 
@@ -90,7 +119,7 @@ USB always works too: plug the cable in and the laptop uses it first. If the lin
 | `POST /identify` | 1–4 word name of an object crop (hazard follow-up) |
 | `POST /speak`, `GET /voices` | natural voice for any phrase (cached on disk in `backend/.tts_cache`), voice list for the picker |
 | `/camera/stream`, `/camera/status` | the USB webcam's live view for Settings > Camera > Wearable |
-| `GET /events` | wearable and wrist events for the phone (button, fall, dark...) |
+| `GET /events` | wearable and wrist events for the phone (button, fall, dark...); `?since=N&wait=20` = long poll |
 | `/wrist/describe`, `/wrist/snapshot.jpg` | test the wrist camera |
 | `/lcd`, `/cancel`, `/alarm`, `/fall-detection` | wearable controls |
 | `/test/<fall\|button\|double\|stop\|cancel\|dark>` | fake events for testing (real wearable if connected, else simulated) |
