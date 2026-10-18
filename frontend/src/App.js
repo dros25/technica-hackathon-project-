@@ -140,14 +140,31 @@ const SonarIcon = () => (
   </svg>
 );
 
-// Seaweed, small fish and bubbles drifting behind the app. Purely decorative.
-const Fish = ({ x, y, s = 1, flip = false, className }) => (
-  <g className={className} transform={`translate(${x} ${y}) scale(${flip ? -s : s} ${s})`}>
-    <path d="M0 0c6-7 16-8 24-3l7-5v16l-7-5C16 8 6 7 0 0z" />
-    <circle cx="7" cy="-1.5" r="1.4" className="fish-eye" />
-  </g>
+// Seaweed, fish and bubbles drifting behind the app. Purely decorative (aria-hidden).
+// A round little fish facing left; `tone` picks its colors, `flip` turns it to face right.
+const Fish = ({ tone = 'coral', flip = false, className = '' }) => (
+  <svg className={`fish fish-${tone} ${flip ? 'fish-flip' : ''} ${className}`} viewBox="0 0 64 42">
+    <g className="fish-tail"><path d="M44 21 L60 9 Q56 21 60 33 Z" /></g>
+    <path className="fish-fin" d="M20 9 Q28 0 37 9 Z" />
+    <ellipse className="fish-body" cx="27" cy="21" rx="19" ry="13.5" />
+    <path className="fish-belly" d="M12 25 Q27 36 42 25 Q27 31 12 25 Z" />
+    <path className="fish-gill" d="M22 13 Q18 21 22 29" />
+    <circle className="fish-eye-white" cx="15" cy="18" r="4.8" />
+    <circle className="fish-eye" cx="14" cy="18.4" r="2.6" />
+    <circle className="fish-glint" cx="13.1" cy="17.3" r="0.9" />
+    <ellipse className="fish-blush" cx="17.5" cy="25.5" rx="3" ry="1.7" />
+    <path className="fish-smile" d="M8.5 23.5 Q10.5 25.6 12.6 23.8" />
+  </svg>
 );
 const Weed = ({ d, className = 'weed' }) => <path className={className} d={d} />;
+// A column of bubbles that rise and fade, each on its own delay
+const Bubbles = ({ className, sizes }) => (
+  <div className={`rise ${className}`}>
+    {sizes.map((size, i) => (
+      <span key={i} style={{ width: size, height: size, animationDelay: `${i * 1.3}s`, left: `${(i * 37) % 70}%` }} />
+    ))}
+  </div>
+);
 function SeaDecor() {
   return (
     <div className="sea-decor" aria-hidden="true">
@@ -155,27 +172,24 @@ function SeaDecor() {
         <Weed d="M30 260C18 220 42 190 28 150S40 90 30 50" />
         <Weed className="weed weed-b" d="M58 260C50 225 70 205 60 170S72 120 64 95" />
         <Weed className="weed weed-c" d="M12 260C6 240 20 225 12 205" />
-        <circle className="bubble" cx="96" cy="120" r="7" />
-        <circle className="bubble" cx="110" cy="92" r="4" />
-        <circle className="bubble" cx="88" cy="60" r="5" />
+        <Weed className="weed weed-d" d="M84 260C78 238 94 222 86 196S92 160 88 140" />
+        <Weed className="weed weed-c" d="M104 260C108 246 98 236 104 222" />
       </svg>
       <svg className="decor-right" viewBox="0 0 160 260" preserveAspectRatio="xMaxYMax meet">
         <Weed d="M130 260C142 222 118 196 132 160S122 110 130 80" />
         <Weed className="weed weed-b" d="M104 260C112 232 94 214 104 186" />
-        <circle className="bubble" cx="60" cy="150" r="6" />
-        <circle className="bubble" cx="74" cy="118" r="3.5" />
+        <Weed className="weed weed-d" d="M150 260C156 236 142 220 150 196" />
+        <Weed className="weed weed-c" d="M78 260C72 244 84 232 78 214" />
       </svg>
-      <svg className="decor-fish fish-pos-a" viewBox="-2 -12 38 24">
-        <Fish x={34} y={0} flip className="fish fish-a" />
-      </svg>
-      <svg className="decor-fish fish-pos-b" viewBox="-2 -12 38 24">
-        <Fish x={0} y={0} className="fish fish-b" />
-      </svg>
-      <svg className="decor-bubbles" viewBox="0 0 40 60">
-        <circle className="bubble" cx="20" cy="48" r="7" />
-        <circle className="bubble" cx="30" cy="24" r="4.5" />
-        <circle className="bubble" cx="14" cy="8" r="3" />
-      </svg>
+      <Bubbles className="rise-left" sizes={[10, 6, 14, 8, 5]} />
+      <Bubbles className="rise-right" sizes={[8, 12, 5, 9]} />
+      <Bubbles className="rise-top" sizes={[7, 5, 9]} />
+      <div className="swim swim-a"><Fish tone="coral" /></div>
+      <div className="swim swim-b"><Fish tone="mint" flip /></div>
+      <div className="swim swim-c"><Fish tone="butter" /></div>
+      <div className="swim swim-d"><Fish tone="lilac" flip /></div>
+      <div className="swim swim-e"><Fish tone="sky" /></div>
+      <div className="swim swim-phone"><Fish tone="coral" /></div>
     </div>
   );
 }
@@ -1181,7 +1195,7 @@ export default function App() {
             <span className="mode-icon" aria-hidden="true"><SonarIcon /></span>
             <span className="mode-text">
               <span className="mode-title">Live guide</span>
-              <span className="mode-sub">Speak when things change</span>
+              <span className="mode-sub">Watches my path</span>
             </span>
           </button>
         </div>
