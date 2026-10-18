@@ -1,6 +1,6 @@
 # SightSea
 
-**A hands-free guide for blind and low-vision people.** A phone worn on the chest describes what's ahead and warns about anything coming at you fast. A wrist camera answers "what am I pointing at?". A small wearable detects falls and asks people nearby for help.
+**A guide for blind and low-vision people.** Hold up your phone, or wear a small camera on your chest or wrist, and SightSea tells you what's in your path and warns about anything coming at you fast. Point the camera at something and press a button to ask "what is this?". A small wearable detects falls and asks people nearby for help.
 
 Built at **Technica 2026** (University of Maryland) by a two-person team.
 
@@ -12,8 +12,9 @@ Built at **Technica 2026** (University of Maryland) by a two-person team.
 |---|---|---|
 | 🗣️ | **Tap to describe** | Double-tap the screen or press the wearable button. Gemini describes the scene in 1–2 sentences, obstacles and directions first, spoken in a natural ElevenLabs voice. |
 | 🌊 | **Live guide** | Watches your path and speaks only about your next few steps: "Chair ahead, two steps." "Stairs going down." It ignores carpets, side walls and room descriptions, and never repeats itself. |
-| ⚠️ | **Hazard watch** | Runs **on the phone, offline, in a fraction of a second**. Calm heads-ups first ("Someone is coming toward you", "Table ahead, in your path"), then an urgent chime and warning if something is about to hit you. A "looming" detector measures how fast parts of the view are expanding (time to contact), so it also catches things it can't name. |
-| 👉 | **Point to ask** | A USB webcam on the wrist. Point at something and press the button: "That's a blue water bottle." Reads signs and labels too. |
+| ⚠️ | **Hazard watch** | Runs **on the phone, offline, in a fraction of a second**. Calm heads-ups first ("Someone is coming toward you", "Table ahead, in your path"), then an urgent chime and warning if something is about to hit you. A "looming" detector measures how fast parts of the view are expanding (time to contact), so it also catches things it can't name. Uses the phone camera. |
+| 👉 | **Point to ask** | Point the phone, or a wearable camera, at something and press the button: "That's a blue water bottle." Reads signs and labels too. |
+| 📷 | **Your choice of camera** | Use the phone's own camera (hold it and point), or a small USB camera worn on the chest, wrist or a cap, so your hands stay free. Switch in Settings. |
 | 🆘 | **Fall detection** | Accelerometer looks for free-fall or impact followed by stillness. A 30-second spoken countdown follows (double-press the button or tap "I'm okay" to cancel), then a buzzer and red LCD saying **"I've fallen! Please help me"** for people nearby. |
 | 🔆 | **Dark warning** | A light sensor warns when it's getting dark around you. |
 | 🪧 | **LCD for passersby** | Shows a message such as "Low vision / Thanks for help", editable from the app. |
@@ -23,7 +24,7 @@ Built at **Technica 2026** (University of Maryland) by a two-person team.
 ### Wearable button
 | Press | Action |
 |---|---|
-| Press | Describe what's ahead (or what the wrist camera points at) |
+| Press | Describe what's ahead (or what the wearable camera points at) |
 | Double press | Switch Tap mode / Live guide |
 | Hold 1 s, let go | Stop talking, Live guide off |
 | Double press during a fall | Cancel the alarm |
@@ -33,7 +34,7 @@ Built at **Technica 2026** (University of Maryland) by a two-person team.
 ## How it works
 
 ```
- Chest phone (React web app)             Laptop (Python / Flask)                 Wearable (Arduino UNO R4 WiFi)
+ Phone (React web app)                   Laptop (Python / Flask)                 Wearable (Arduino UNO R4 WiFi)
  ┌───────────────────────────┐  HTTPS   ┌──────────────────────────────┐  Wi-Fi  ┌───────────────────────────┐
  │ camera view               │ (ngrok)  │ /narrate  → Gemini vision    │  TCP    │ accelerometer (falls)     │
  │ hazard watch (on-device,  │ ───────► │ /speak    → ElevenLabs voice │ ◄─────► │ light sensor              │
@@ -41,7 +42,8 @@ Built at **Technica 2026** (University of Maryland) by a two-person team.
  │ speech, settings, alerts  │          │ webcam    → "point to ask"   │         └───────────────────────────┘
  └───────────────────────────┘          └──────────────────────────────┘
                                                    ▲ USB
-                                              wrist webcam
+                                         wearable camera
+                                     (chest, wrist or cap)
 ```
 
 - **Phone:** React app served by Flask through ngrok, so any phone browser works with nothing to install. Hazard watch runs entirely in the browser: MediaPipe EfficientDet-Lite0 detection with tracking, where an object's box growing over time gives its time to contact, plus a model-free looming detector (block-matching optical flow with scale fitting). Gemini names unfamiliar hazards a moment after the warning.
@@ -54,8 +56,8 @@ Built at **Technica 2026** (University of Maryland) by a two-person team.
 
 - Arduino UNO R4 WiFi + Grove Base Shield (switch set to **5V**)
 - Grove: 3-axis accelerometer (MMA7660; ADXL345/LIS3DH also detected), light sensor (A0), button (D2), buzzer (D3), RGB LCD 16×2 (I2C)
-- USB webcam (wrist)
-- Phone (chest) and a power bank or phone USB-C for the Arduino
+- Optional USB webcam, worn on the chest, wrist or a cap
+- A phone, and a power bank or the phone's USB-C to power the Arduino
 
 ---
 
@@ -85,7 +87,7 @@ More detail for developers is in [NOTES.md](NOTES.md).
 
 ## What's next
 
-- A small wireless wrist camera (such as an ESP32-CAM) instead of a USB cable
+- A small wireless wearable camera (such as an ESP32-CAM) instead of a USB cable
 - Running the server in the cloud or on the phone, so no laptop is needed
 - Texting an emergency contact with your location when the fall alarm goes off
 - A vibration motor for silent hazard alerts, and testing with blind and low-vision users
