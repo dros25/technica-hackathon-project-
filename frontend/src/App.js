@@ -63,7 +63,7 @@ export default function App() {
   const [caption, setCaption] = useState('Tap the porthole to hear what is ahead of you.');
   const [busy, setBusy] = useState(false);
   const [online, setOnline] = useState(null);
-  const [wearable, setWearable] = useState({ connected: true, mock: false });
+  const [wearable, setWearable] = useState({ connected: true, mock: false, link: null });
   const [fall, setFall] = useState(null); // null | 'pending' (countdown) | 'alarm'
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [fallDetection, setFallDetection] = useState(() => loadSetting('fallDetection', true));
@@ -530,7 +530,7 @@ export default function App() {
         const res = await api('/events');
         const data = await res.json();
         setOnline(true);
-        setWearable({ connected: data.connected !== false, mock: !!data.mock });
+        setWearable({ connected: data.connected !== false, mock: !!data.mock, link: data.link || null });
         // Server or wearable restarted with a different setting: put the user's choice back
         if (typeof data.fall_detection === 'boolean' && data.fall_detection !== fallDetectionRef.current) {
           sendFallDetection(fallDetectionRef.current);
@@ -566,6 +566,10 @@ export default function App() {
           } else if (ev.type === 'disconnected') {
             setCaption('Wearable disconnected. Trying to reconnect.');
             speak('Wearable disconnected.');
+          } else if (ev.type === 'connected') {
+            const how = ev.link === 'wifi' ? 'over Wi-Fi' : 'by cable';
+            setCaption(`Wearable connected ${how}.`);
+            speak(`Wearable connected ${how}.`);
           } else if (ev.type === 'reconnected') {
             setCaption('Wearable reconnected.');
             speak('Wearable reconnected.');
@@ -610,10 +614,10 @@ export default function App() {
     : online === null
       ? { text: 'Connecting', tone: 'quiet' }
       : !wearable.connected
-        ? { text: 'Wearable disconnected', tone: 'alert' }
+        ? { text: 'Wearable not connected', tone: 'alert' }
         : wearable.mock
           ? { text: 'Online, demo wearable', tone: 'ok' }
-          : { text: 'Online, wearable connected', tone: 'ok' };
+          : { text: `Online, wearable on ${wearable.link === 'wifi' ? 'Wi-Fi' : 'USB'}`, tone: 'ok' };
 
   const hazardPill = {
     off: { text: hazardOn && mode !== 'live' ? 'Hazard watch: Live guide only' : 'Hazard watch off', tone: 'quiet' },

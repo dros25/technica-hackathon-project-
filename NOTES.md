@@ -43,7 +43,7 @@ On the phone: open the https link, tap **Visit Site** on ngrok's notice, allow t
 Phone (React web app, chest-mounted)            Laptop (Flask, backend/Main.py)          Arduino wearable
 - camera + hazard watch (ON-DEVICE, no network) - /narrate  Gemini scene descriptions    - fall detection (accelerometer)
 - speech: hazard > answers > narration          - /identify Gemini names an object        - light sensor, LCD, buzzer, button
-- polls /events every 1 s                       - /events   wearable + wrist events       - serial over USB to the laptop
+- polls /events every 1 s                       - /events   wearable + wrist events       - USB cable OR Wi-Fi (phone hotspot)
                                                 - wrist webcam (OpenCV)
                                                 - serves the built app on port 5000
 ```
@@ -60,19 +60,31 @@ Tuning lives in the "Tunables" blocks at the top of both files (time-to-contact 
 ### Wrist camera, "point to ask" (`backend/wrist_camera.py`)
 A USB webcam on the forearm, plugged into the laptop. With it connected, pressing the wearable button describes what the wrist camera sees; the **chest phone speaks** the answer (one voice). Without it, the button describes from the chest camera. Pick the camera with `WRIST_CAMERA=` in `.env`; check the aim at `http://localhost:5000/wrist/snapshot.jpg`.
 
-### Wearable (`firmware/guardian/guardian.ino`)
-Arduino UNO R4 WiFi + Grove shield: button D2, buzzer D3, light sensor A0, accelerometer and LCD on I2C. Fall = free-fall or impact, then stillness, then a **30 s countdown** (double-click the button or tap "I'm okay" to cancel), then the alarm.
+### Wearable (`firmware/guardian/guardian.ino`, laptop side `backend/hardware.py`)
+Arduino UNO R4 WiFi + Grove shield: button D2, buzzer D3, light sensor A0, accelerometer and LCD on I2C. Fall = free-fall or impact, then stillness, then a **30 s countdown** (double-click the button or tap "I'm okay" to cancel), then the alarm. Pressing the button (outside a fall) = "describe what's ahead" on the phone.
+
+It talks to the laptop over **USB, Wi-Fi, or both** (same messages either way; USB wins when both are up, so nothing is handled twice). The app's status shows which: "Online, wearable on Wi-Fi / USB".
+
+#### Wireless setup (no laptop on your back)
+The laptop sits on a table; the wearable is powered by the iPhone and talks over the iPhone's hotspot.
+1. **iPhone:** Settings > Personal Hotspot > turn on **Allow Others to Join** and **Maximize Compatibility** (the board only uses 2.4 GHz Wi-Fi). Keep that screen open while things connect the first time.
+2. **Laptop:** join the iPhone's hotspot. Start the backend (`start.bat`). When Windows asks, **allow Python on both private and public networks** (needed to hear the wearable).
+3. **Firmware:** in `firmware/guardian/`, copy `secrets.example.h` to `secrets.h`, fill in the hotspot name and password, and upload with the Arduino IDE (USB, once). `secrets.h` is gitignored.
+4. **Power:** unplug from the laptop and plug the Arduino into the **iPhone 15's USB-C port** (USB-C cable). The LCD shows "Wi-Fi..." then the normal message; within a few seconds the phone says "Wearable connected over Wi-Fi."
+5. **If it never connects:** check the backend window. It prints "this laptop's addresses: ...". Put that address in `secrets.h` as `#define LAPTOP_IP 172,20,10,2` (commas, not dots) and upload again. Some hotspots block the broadcast the board uses to find the laptop.
+
+Tips: the Arduino IDE Serial Monitor shows `WIFI:` lines (connecting, IP, not found). Charge the iPhone before demoing: camera + AI + hotspot + powering the board drains it faster. While the hotspot is missing, the board retries every 15–60 s, and each try pauses the board for a few seconds; remove `secrets.h` for USB-only use.
 
 ### Backend endpoints (`backend/Main.py`)
 | Endpoint | What it does |
 |---|---|
-| `/health` | status, which keys are loaded (last 4 chars), wrist camera |
+| `/health` | status, which keys are loaded (last 4 chars), wearable link (usb/wifi), wrist camera |
 | `POST /narrate` | scene description (tap and live modes) |
 | `POST /identify` | 1–4 word name of an object crop (hazard follow-up) |
 | `GET /events` | wearable and wrist events for the phone (button, fall, dark...) |
 | `/wrist/describe`, `/wrist/snapshot.jpg` | test the wrist camera |
 | `/lcd`, `/cancel`, `/alarm`, `/fall-detection` | wearable controls |
-| `/test/<fall\|button\|cancel\|dark>` | fake events for testing |
+| `/test/<fall\|button\|cancel\|dark>` | fake events for testing (real wearable if connected, else simulated) |
 
 ---
 
@@ -90,7 +102,7 @@ Arduino UNO R4 WiFi + Grove shield: button D2, buzzer D3, light sensor A0, accel
 **Built**
 - Phone app: tap-to-describe, Live guide, hazard watch (object + looming), spoken warnings with follow-up names, settings, wearable message editor
 - Backend: Gemini with model fallback, ElevenLabs voice (optional), OpenRouter backup, wrist camera, `/identify`
-- Wearable: fall detection with countdown, light sensor, LCD, buzzer, button
+- Wearable: fall detection with countdown, light sensor, LCD, buzzer, button; USB or Wi-Fi (phone hotspot, powered by the iPhone)
 - `start.bat` one-click setup and public link
 - Poster (design canvas in claude.ai)
 
@@ -98,12 +110,14 @@ Arduino UNO R4 WiFi + Grove shield: button D2, buzzer D3, light sensor A0, accel
 - Cane sleeve: elastic wrap with two buttons (round = ask / double = Live guide; ridged = repeat / hold = I'm okay) and a vibration motor for hazard buzzes
 - Second Grove button on D4 and press patterns in firmware
 - Fall countdown 10 s for demos (currently 30 s)
-- Wireless wearable (currently USB to the laptop)
+- Always-on cloud hosting (Google Cloud Run), so the website works without the laptop
+- "What's connected" panel in the app
 
 ---
 
 ## Known limits
 - Hazard watch is tested on simulated video. Tune thresholds on the real camera.
+- Wi-Fi wearable is tested with a simulated board and a compile check, not yet on the real Arduino and iPhone hotspot.
 - The looming detector catches unrecognized objects later (they must cover a reasonable patch of the view) and struggles with plain, textureless surfaces.
 - Two phones on the same backend split wearable events between them. Use one phone as "the user's" phone.
 - Python 3.15 may lack some package builds (OpenCV). Use Python 3.12 if `pip install` fails.

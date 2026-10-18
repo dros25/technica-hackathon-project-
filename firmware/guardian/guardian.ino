@@ -11,6 +11,13 @@
 
   Library: "Grove - LCD RGB Backlight" (Arduino IDE > Library Manager)
 
+  Wi-Fi (optional, no laptop cable needed): copy secrets.example.h to secrets.h in this folder,
+  put in your phone hotspot's name and password, and upload. Power the board from the phone
+  (iPhone 15+ USB-C) or any USB battery. On iPhone turn on Personal Hotspot > Maximize
+  Compatibility (the board only uses 2.4 GHz). No secrets.h = USB only, exactly as before.
+  Over Wi-Fi the same messages go by UDP: to the laptop on port 5005 as "G1|<id>|<message>",
+  commands back on port 5006. With both USB and Wi-Fi up, the laptop uses USB and ignores the copies.
+
   Serial protocol (115200 baud, one message per line):
     Arduino -> laptop:  BTN | FALL_PENDING:<sec> | FALL (alarm) | CANCEL | LIGHT:<0-1023> | FALLDET:ON/OFF | READY | ERR:<msg>
     Laptop -> Arduino:  LCD:<line1>|<line2>   ALARM:ON/OFF   TESTFALL   CANCEL   FALLDET:ON/OFF   PING
@@ -19,6 +26,12 @@
 
 #include <Wire.h>
 #include "rgb_lcd.h"
+
+#if __has_include("secrets.h")
+  #include "secrets.h"
+  #define USE_WIFI 1
+  #include <WiFiS3.h>
+#endif
 
 // ---------- Pins ----------
 const int BUTTON_PIN = 2;
@@ -75,6 +88,34 @@ bool beepOn = false;
 int lightValue = 1023;
 
 String serialBuf = "";
+
+// ---------- Messages to the laptop: USB and (if set up) Wi-Fi ----------
+#ifdef USE_WIFI
+WiFiUDP udp;
+const unsigned int LAPTOP_PORT = 5005;   // laptop listens here
+const unsigned int LOCAL_PORT  = 5006;   // we listen here for commands
+IPAddress laptopIp;
+bool haveLaptop = false;                 // learned from the laptop's first reply
+unsigned long lastLaptopMsg = 0;
+bool udpStarted = false;
+unsigned long lastWifiTry = 0;
+unsigned long wifiRetryMs = 15000;       // grows while the hotspot is missing (connecting blocks)
+unsigned long lastHeartbeat = 0;
+unsigned long lastWifiRead = 0;
+unsigned long msgId = 0;
+long lastCmdId = -1;
+void wifiSend(const String &line, bool important);
+#endif
+
+// The R4 WiFi can't tell whether a laptop is listening on USB, so send both ways;
+// the laptop ignores the Wi-Fi copy while USB is connected.
+void emit(const String &line, bool important) {
+  Serial.println(line);
+#ifdef USE_WIFI
+  wifiSend(line, important);
+#endif
+}
+void emit(const String &line) { emit(line, true); }
 
 // ---------- Accelerometer ----------
 bool present(uint8_t addr) {
@@ -218,15 +259,14 @@ void triggerFall() {
   pendingStart = millis();
   lastShownSec = -1;
   lastPressTime = 0;
-  Serial.print("FALL_PENDING:");
-  Serial.println(COUNTDOWN_MS / 1000);
+  emit("FALL_PENDING:" + String(COUNTDOWN_MS / 1000));
   lcd.setRGB(255, 160, 0);  // amber while counting down
 }
 
 // Step 2: nobody cancelled -> full alarm
 void triggerAlarm() {
   mode = FALLEN;
-  Serial.println("FALL");
+  emit("FALL");
   showLines("I've fallen!", "Please help me");
   lcd.setRGB(255, 0, 0);
 }
@@ -238,7 +278,7 @@ void cancelFall() {
   chirpUntil = 0;
   digitalWrite(BUZZER_PIN, LOW);
   beepOn = false;
-  Serial.println("CANCEL");
+  emit("CANCEL");
   showNormal();
 }
 
@@ -327,7 +367,7 @@ void updateButton(unsigned long now) {
         else lastPressTime = now;
       } else {
         if (mode == IMPACT) { mode = NORMAL; stillStart = 0; }  // they're moving the button: fine
-        Serial.println("BTN");
+        emit("BTN");
       }
     }
   }
@@ -338,8 +378,7 @@ void updateLight(unsigned long now) {
   if (now - lastLightSend < 1000) return;
   lastLightSend = now;
   lightValue = analogRead(LIGHT_PIN);
-  Serial.print("LIGHT:");
-  Serial.println(lightValue);
+  emit("LIGHT:" + String(lightValue), false);  // sent every second; a lost one doesn't matter
   if (mode == NORMAL) setNormalColor();
 }
 
@@ -363,14 +402,14 @@ void handleCommand(String cmd) {
     else if (mode == IMPACT) { mode = NORMAL; stillStart = 0; }
   } else if (cmd == "FALLDET:ON") {
     fallDetection = true;
-    Serial.println("FALLDET:ON");
+    emit("FALLDET:ON");
   } else if (cmd == "FALLDET:OFF") {
     fallDetection = false;
     if (mode == PENDING || mode == FALLEN) cancelFall();
     else if (mode == IMPACT) { mode = NORMAL; stillStart = 0; }
-    Serial.println("FALLDET:OFF");
+    emit("FALLDET:OFF");
   } else if (cmd == "PING") {
-    Serial.println("READY");
+    emit("READY");
   } else if (cmd == "DIAG") {
     Serial.print("ACCEL:");
     Serial.print(accelName());
@@ -395,6 +434,95 @@ void readSerial() {
   }
 }
 
+// ---------- Wi-Fi ----------
+#ifdef USE_WIFI
+IPAddress broadcastAddress() {
+  IPAddress ip = WiFi.localIP(), mask = WiFi.subnetMask(), b;
+  for (int i = 0; i < 4; i++) b[i] = ip[i] | (~mask[i] & 0xFF);
+  return b;
+}
+
+// Connecting blocks for a few seconds, so only retry now and then (and less often if it keeps failing)
+void wifiConnect(bool force) {
+  if (WiFi.status() == WL_CONNECTED) return;
+  if (!force && millis() - lastWifiTry < wifiRetryMs) return;
+  lastWifiTry = millis();
+  udpStarted = false;
+  haveLaptop = false;
+  Serial.print("WIFI:connecting to ");
+  Serial.println(WIFI_SSID);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  if (WiFi.status() == WL_CONNECTED) {
+    unsigned long t = millis();
+    while (WiFi.localIP() == IPAddress(0, 0, 0, 0) && millis() - t < 4000) delay(100);
+    udp.begin(LOCAL_PORT);
+    udpStarted = true;
+    wifiRetryMs = 15000;
+    Serial.print("WIFI:connected, IP ");
+    Serial.println(WiFi.localIP());
+  } else {
+    wifiRetryMs = min(wifiRetryMs * 2, 60000UL);
+    Serial.println("WIFI:not found (hotspot on? Maximize Compatibility on?) - will retry");
+  }
+}
+
+void wifiSendRaw(const String &payload) {
+  if (!udpStarted || WiFi.status() != WL_CONNECTED) return;
+#ifdef LAPTOP_IP
+  if (!haveLaptop) { laptopIp = IPAddress(LAPTOP_IP); haveLaptop = true; }
+  bool known = true;                    // fixed address from secrets.h: never broadcast
+#else
+  bool known = haveLaptop && millis() - lastLaptopMsg < 15000;
+#endif
+  udp.beginPacket(known ? laptopIp : broadcastAddress(), LAPTOP_PORT);
+  udp.print(payload);
+  udp.endPacket();
+}
+
+// Important messages go 3 times (UDP can drop packets); the laptop ignores repeats by id
+void wifiSend(const String &line, bool important) {
+  String payload = "G1|" + String(++msgId) + "|" + line;
+  for (int i = 0; i < (important ? 3 : 1); i++) wifiSendRaw(payload);
+}
+
+void readWifi() {
+  if (!udpStarted) return;
+  int size = udp.parsePacket();
+  while (size > 0) {
+    char buf[96];
+    int n = udp.read(buf, sizeof(buf) - 1);
+    buf[n > 0 ? n : 0] = 0;
+    String msg(buf);
+    if (msg.startsWith("G1|")) {
+      int bar = msg.indexOf('|', 3);
+      if (bar > 0) {
+        long id = msg.substring(3, bar).toInt();
+        laptopIp = udp.remoteIP();
+        haveLaptop = true;
+        lastLaptopMsg = millis();
+        if (id != lastCmdId) {          // the laptop sends each command twice
+          lastCmdId = id;
+          handleCommand(msg.substring(bar + 1));
+        }
+      }
+    }
+    size = udp.parsePacket();
+  }
+}
+
+void updateWifi(unsigned long now) {
+  wifiConnect(false);
+  if (now - lastHeartbeat >= 2000) {    // "I'm here" so the laptop knows the link is up
+    lastHeartbeat = now;
+    wifiSend("HELLO", false);
+  }
+  if (now - lastWifiRead >= 50) {       // each check talks to the Wi-Fi chip: not every loop
+    lastWifiRead = now;
+    readWifi();
+  }
+}
+#endif
+
 // ---------- Main ----------
 void setup() {
   Serial.begin(115200);
@@ -417,9 +545,14 @@ void setup() {
     scanI2C();
   }
 
+#ifdef USE_WIFI
+  showLines("Guardian", "Wi-Fi...");
+  wifiConnect(true);
+#endif
+
   delay(1000);
   showNormal();
-  Serial.println("READY");
+  emit("READY");
 }
 
 void loop() {
@@ -430,4 +563,7 @@ void loop() {
   updateLight(now);
   updatePending(now);
   updateBuzzer(now);
+#ifdef USE_WIFI
+  updateWifi(now);
+#endif
 }

@@ -6,3 +6,6 @@ venv/
 .DS_Store
 node_modules/
 frontend/build/
+
+# Arduino Wi-Fi password
+firmware/guardian/secrets.h

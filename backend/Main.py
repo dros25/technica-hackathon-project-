@@ -155,11 +155,12 @@ def load_hardware():
         return MockHardware()
     try:
         from hardware import Hardware  # backend/hardware.py
+        # Never fails: keeps looking for the Arduino on USB and listens for it on Wi-Fi
         hw_real = Hardware(port=os.getenv("ARDUINO_PORT") or None)
         hw_real.is_mock = False
         return hw_real
-    except Exception as e:  # ImportError, no Arduino found, port busy...
-        print(f"[hardware] real hardware unavailable ({e}), using MOCK mode")
+    except Exception as e:
+        print(f"[hardware] wearable bridge unavailable ({e}), using MOCK mode")
         return MockHardware()
 
 
@@ -351,6 +352,12 @@ def health():
     return jsonify({
         "status": "Guardian backend online",
         "hardware": "mock" if getattr(hw, "is_mock", False) else "arduino",
+        "wearable": {
+            "connected": getattr(hw, "connected", False),
+            "link": getattr(hw, "link", None),           # "usb", "wifi" or None
+            "wifi_ip": getattr(hw, "wifi_ip", None),
+            "light": hw.light,
+        },
         "gemini": bool(gemini_client),
         "elevenlabs": bool(eleven_client),
         # Which keys THIS laptop loaded (last 4 characters only)
@@ -443,6 +450,7 @@ def events():
         "events": out,
         "light": hw.light,
         "connected": getattr(hw, "connected", True),
+        "link": getattr(hw, "link", None),
         "mock": getattr(hw, "is_mock", False),
         "fall_detection": getattr(hw, "fall_detection", True),
     })
@@ -486,6 +494,8 @@ def lcd():
 def cancel():
     """'I'm okay' from the phone: stops the fall alarm on the wearable too."""
     hw.cancel_fall()
+    if _sim_fall_timer:  # a simulated test countdown (no wearable connected)
+        _sim_fall_timer.cancel()
     return jsonify({"status": "success"})
 
 
@@ -496,20 +506,39 @@ def alarm():
     return jsonify({"status": "success", "on": on})
 
 
+_sim_fall_timer = None
+
+
 @app.route("/test/<event_type>", methods=["POST", "GET"])
 def test_event(event_type):
-    """Fake events for testing the frontend: /test/fall, /test/button, /test/cancel, /test/dark"""
+    """Fake events for testing the frontend: /test/fall, /test/button, /test/cancel, /test/dark.
+    With the wearable connected, fall/cancel go to the real device; otherwise they're simulated."""
+    global _sim_fall_timer
     if event_type not in ("fall", "button", "cancel", "dark"):
         return jsonify({"error": "use fall, button, cancel or dark"}), 400
+    mock = getattr(hw, "is_mock", False)
+    live = getattr(hw, "connected", False) and not mock
     if event_type == "fall":
-        hw.test_fall()  # starts the 30 s countdown (real Arduino or mock), alarm if not cancelled
+        if live or mock:
+            hw.test_fall()  # countdown on the device (or the mock), alarm if not cancelled
+        else:
+            seconds = int(os.getenv("MOCK_COUNTDOWN", "30"))
+            push_event({"type": "fall_pending", "seconds": seconds})
+            if _sim_fall_timer:
+                _sim_fall_timer.cancel()
+            _sim_fall_timer = threading.Timer(seconds, lambda: push_event({"type": "fall"}))
+            _sim_fall_timer.daemon = True
+            _sim_fall_timer.start()
     elif event_type == "cancel":
-        hw.cancel_fall()
-    elif getattr(hw, "is_mock", False):
-        hw.inject(event_type)
+        if live or mock:
+            hw.cancel_fall()
+        else:
+            if _sim_fall_timer:
+                _sim_fall_timer.cancel()
+            push_event({"type": "cancel"})
     else:
-        return jsonify({"error": "with real hardware only /test/fall works - press the real button"}), 400
-    return jsonify({"status": "sent", "event": event_type})
+        hw.inject(event_type)
+    return jsonify({"status": "sent", "event": event_type, "wearable": "live" if live else "simulated"})
 
 
 # React app (only when built). API routes above take priority.
