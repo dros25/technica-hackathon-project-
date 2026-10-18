@@ -28,6 +28,20 @@ const ALERT_PHRASES = [
   "Okay, glad you're safe.",
   ...HAZARD_NAMES.flatMap((n) => [`${n} ahead!`, `${n}, left!`, `${n}, right!`]),
 ];
+// Said when you change something; pre-made too, so they're never in the phone voice
+const UI_PHRASES = [
+  "Live guide on. I'll warn you if something comes at you fast, and speak when something new appears.",
+  "Live guide on. I'll speak when something new appears.",
+  'Tap mode on. Tap the camera view or press your button to hear what is ahead.',
+  'Using the wearable camera. Press your button to hear what is ahead.',
+  'Using the phone camera.',
+  'Fall detection on.', 'Fall detection off.',
+  'Hazard warnings on in Live guide.', 'Hazard warnings off.',
+  'Settings.', 'Settings closed.', 'Settings', 'Close settings',
+  'Tap mode. Describe the scene only when I ask',
+  'Live guide. Speak up whenever something new appears',
+  'Wearable display updated.',
+];
 
 function loadSetting(key, fallback) {
   try {
@@ -77,6 +91,11 @@ const GearIcon = () => (
   <svg {...iconProps}>
     <circle cx="12" cy="12" r="3" />
     <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+  </svg>
+);
+const CloseIcon = () => (
+  <svg {...iconProps}>
+    <path d="M18 6 6 18M6 6l12 12" />
   </svg>
 );
 const CameraIcon = () => (
@@ -161,6 +180,7 @@ export default function App() {
   const [hazardOn, setHazardOn] = useState(() => loadSetting('hazardOn', true));
   const [sensitivity, setSensitivity] = useState(() => loadSetting('sensitivity', 'normal'));
   const [showBoxes, setShowBoxes] = useState(() => loadSetting('showBoxes', true));
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [voices, setVoices] = useState([]);
   const [voiceId, setVoiceId] = useState(() => loadSetting('voiceId', ''));
   const [cameraSource, setCameraSource] = useState(() => loadSetting('cameraSource', 'phone')); // phone | wearable
@@ -170,7 +190,10 @@ export default function App() {
 
   const videoRef = useRef(null);
   const overlayRef = useRef(null);
-  const settingsRef = useRef(null);
+  const settingsBtnRef = useRef(null);
+  const closeBtnRef = useRef(null);
+  const appMainRef = useRef(null);
+  const appHeaderRef = useRef(null);
   const watcherRef = useRef(null);
   const audioCtxRef = useRef(null);
   const lastHazardRef = useRef(0);
@@ -261,7 +284,10 @@ export default function App() {
     audio.onended = () => { if (speechRef.current.id === id) speechRef.current.priority = null; };
     audio.src = url;
     audio.playbackRate = priority === 'urgent' ? 1.15 : 1;
-    audio.play().catch(() => { if (speechRef.current.id === id) deviceSay(text, priority, id); });
+    audio.play().catch((err) => {
+      console.warn('[voice] audio playback blocked, using phone voice:', err && err.message);
+      if (speechRef.current.id === id) deviceSay(text, priority, id);
+    });
   };
 
   const speak = useCallback((text, priority = 'high') => {
@@ -280,14 +306,15 @@ export default function App() {
       naturalAudio(text).catch(() => {}); // ready for next time
       return deviceSay(text, priority, id);
     }
-    const waitMs = priority === 'low' ? 1500 : 4000;
+    const waitMs = priority === 'low' ? 2000 : 7000;
     Promise.race([
       naturalAudio(text),
       new Promise((_, reject) => setTimeout(() => reject(new Error('slow')), waitMs)),
     ])
       .then((url) => { if (speechRef.current.id === id) playUrl(url, text, priority, id); })
-      .catch(() => {
+      .catch((err) => {
         if (speechRef.current.id !== id) return;
+        console.warn(`[voice] natural voice unavailable for "${text}" (${err && err.message}), using phone voice`);
         if (priority === 'low') speechRef.current.priority = null; // skip a slow hover label
         else deviceSay(text, priority, id);                         // never drop an alert
       });
@@ -326,7 +353,7 @@ export default function App() {
     saveSetting('voiceId', voiceId);
     if (!voiceId || !premiumVoice) return;
     const t = setTimeout(() => {
-      ALERT_PHRASES.forEach((p, i) => setTimeout(() => naturalAudio(p).catch(() => {}), i * 150));
+      [...ALERT_PHRASES, ...UI_PHRASES].forEach((p, i) => setTimeout(() => naturalAudio(p).catch(() => {}), i * 150));
     }, 1500);
     return () => clearTimeout(t);
   }, [voiceId, premiumVoice, naturalAudio]);
@@ -779,6 +806,25 @@ export default function App() {
     }
   };
 
+  // Settings screen: focus Close on open, return focus on close, Esc closes,
+  // and the main screen behind it is hidden from screen readers and keyboard.
+  // (The camera keeps running underneath so the hazard watcher never stalls.)
+  useEffect(() => {
+    const behind = [appMainRef.current, appHeaderRef.current].filter(Boolean);
+    if (settingsOpen) {
+      behind.forEach((el) => { el.setAttribute('inert', ''); el.setAttribute('aria-hidden', 'true'); });
+      if (closeBtnRef.current) closeBtnRef.current.focus();
+      const onKey = (e) => { if (e.key === 'Escape') { setSettingsOpen(false); speak('Settings closed.'); } };
+      window.addEventListener('keydown', onKey);
+      return () => window.removeEventListener('keydown', onKey);
+    }
+    behind.forEach((el) => { el.removeAttribute('inert'); el.removeAttribute('aria-hidden'); });
+    if (settingsBtnRef.current && (!document.activeElement || document.activeElement === document.body)) {
+      settingsBtnRef.current.focus();
+    }
+    return undefined;
+  }, [settingsOpen, speak]);
+
   // ---------- Labels ----------
   const status = online === false
     ? { text: 'Offline', tone: 'alert' }
@@ -819,19 +865,19 @@ export default function App() {
         : { text: hazardPill.text, tone: hazardPill.tone === 'alert' ? 'alert' : 'live' };
 
   const openSettings = () => {
-    const d = settingsRef.current;
-    if (!d) return;
-    d.open = true;
-    d.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    const summary = d.querySelector('summary');
-    if (summary) summary.focus({ preventScroll: true });
+    setSettingsOpen(true);
+    speak('Settings.');
+  };
+  const closeSettings = () => {
+    setSettingsOpen(false);
+    speak('Settings closed.');
   };
 
   return (
     <div className={`app ${mode === 'live' ? 'is-live' : ''}`}>
       <SeaDecor />
 
-      <header className="topbar">
+      <header className="topbar" ref={appHeaderRef}>
         <div className="brand-wrap">
           <h1 className="brand">
             <span className="brand-tile" aria-hidden="true">
@@ -851,14 +897,10 @@ export default function App() {
             <span className="status-dot" aria-hidden="true" />
             {status.text}
           </p>
-          <button type="button" className="settings-btn" onClick={openSettings} {...hover('Open settings')}>
-            <GearIcon />
-            <span>Settings</span>
-          </button>
         </div>
       </header>
 
-      <main className="stage">
+      <main className="stage" ref={appMainRef}>
         <div className={`viewport ${busy ? 'is-busy' : ''} ${hasCamera ? 'has-camera' : ''}`}>
           <button
             type="button"
@@ -888,13 +930,14 @@ export default function App() {
             {busy && <span className="feed-busy" aria-hidden="true">Looking…</span>}
           </button>
 
-          <div className="caption" role="status" aria-live="polite">
-            <span className="caption-icon" aria-hidden="true"><SpeakerIcon /></span>
-            <span className="caption-body">
-              <span className="caption-label" aria-hidden="true">SightSea</span>
-              <span className="caption-text">{caption}</span>
-            </span>
-          </div>
+        </div>
+
+        <div className="caption" role="status" aria-live="polite">
+          <span className="caption-icon" aria-hidden="true"><SpeakerIcon /></span>
+          <span className="caption-body">
+            <span className="caption-label" aria-hidden="true">SightSea</span>
+            <span className="caption-text">{caption}</span>
+          </span>
         </div>
 
         <div className="modes" role="radiogroup" aria-label="How SightSea describes the scene">
@@ -928,138 +971,165 @@ export default function App() {
           </button>
         </div>
 
-        <details className="settings" ref={settingsRef}>
-          <summary {...hover('Settings')}>Settings</summary>
-
-          <label className="toggle" {...hover(`Hazard watch in Live guide. Warn me when something comes at me fast. ${hazardOn ? 'On' : 'Off'}`)}>
-            <input type="checkbox" checked={hazardOn} onChange={(e) => {
-              setHazardOn(e.target.checked);
-              const msg = e.target.checked ? 'Hazard warnings on in Live guide.' : 'Hazard warnings off.';
-              setCaption(msg);
-              speak(msg);
-            }} />
-            <span>Hazard watch (Live guide): warn me when something comes at me fast</span>
-          </label>
-
-          <fieldset className="display-fields">
-            <legend>Hazard warning sensitivity</legend>
-            <p className="hint">Higher warns earlier, but may warn more often.</p>
-            <div className="sensitivity" role="radiogroup" aria-label="Hazard warning sensitivity">
-              {['low', 'normal', 'high'].map((level) => (
-                <button
-                  key={level}
-                  type="button"
-                  role="radio"
-                  aria-checked={sensitivity === level}
-                  className="mode sens"
-                  onClick={() => setSensitivity(level)}
-                  {...hover(`Sensitivity ${level}`)}
-                >
-                  <span className="mode-title">{level[0].toUpperCase() + level.slice(1)}</span>
-                </button>
-              ))}
-            </div>
-          </fieldset>
-
-          <label className="toggle" {...hover(`Show detection boxes on the camera. ${showBoxes ? 'On' : 'Off'}`)}>
-            <input type="checkbox" checked={showBoxes} onChange={(e) => setShowBoxes(e.target.checked)} />
-            <span>Show detection boxes on the camera (for sighted helpers and demos)</span>
-          </label>
-
-          <label className="toggle" {...hover(`Read buttons aloud. ${readAloud ? 'On' : 'Off'}`)}>
-            <input type="checkbox" checked={readAloud} onChange={(e) => setReadAloud(e.target.checked)} />
-            <span>Read buttons aloud when I point at them</span>
-          </label>
-
-          <label className="toggle" {...hover(`Fall detection. ${fallDetection ? 'On' : 'Off'}`)}>
-            <input type="checkbox" checked={fallDetection} onChange={(e) => toggleFallDetection(e.target.checked)} />
-            <span>Fall detection, with a 30 second countdown before the alarm</span>
-          </label>
-
-          <fieldset className="display-fields">
-            <legend>Camera</legend>
-            <div className="sensitivity two" role="radiogroup" aria-label="Which camera to use">
-              <button
-                type="button"
-                role="radio"
-                aria-checked={cameraSource === 'phone'}
-                className="mode sens"
-                onClick={() => chooseCamera('phone')}
-                {...hover('Phone camera')}
-              >
-                <span className="mode-title">Phone</span>
-              </button>
-              <button
-                type="button"
-                role="radio"
-                aria-checked={cameraSource === 'wearable'}
-                className="mode sens"
-                onClick={() => chooseCamera('wearable')}
-                {...hover('Wearable camera')}
-              >
-                <span className="mode-title">Wearable</span>
-              </button>
-            </div>
-            <p className="hint">
-              {cameraSource === 'wearable'
-                ? (wearableCam && !wearableCam.available
-                  ? `Wearable camera not found: ${wearableCam.error || 'check that it is plugged into the laptop.'}`
-                  : 'Press your button to hear what the wearable camera sees. Hazard watch needs the phone camera, so it pauses.')
-                : 'Point your phone where you are walking.'}
-            </p>
-          </fieldset>
-
-          <label className="toggle" {...hover(`Natural voice. ${premiumVoice ? 'On' : 'Off'}`)}>
-            <input type="checkbox" checked={premiumVoice} onChange={(e) => setPremiumVoice(e.target.checked)} />
-            <span>Natural voice for everything (uses ElevenLabs credits)</span>
-          </label>
-
-          {premiumVoice && voices.length > 0 && (
-            <fieldset className="display-fields">
-              <legend>Voice</legend>
-              <label {...hover('Choose a voice')}>
-                Choose a voice
-                <select
-                  className="voice-select"
-                  value={voiceId}
-                  onChange={(e) => {
-                    setVoiceId(e.target.value);
-                    previewVoice(voices.find((v) => v.voice_id === e.target.value));
-                  }}
-                >
-                  {voices.map((v) => (
-                    <option key={v.voice_id} value={v.voice_id}>{voiceLabel(v)}</option>
-                  ))}
-                </select>
-              </label>
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => previewVoice(voices.find((v) => v.voice_id === voiceId))}
-                {...hover('Play a sample of this voice')}
-              >
-                Play a sample
-              </button>
-            </fieldset>
-          )}
-
-          <fieldset className="display-fields">
-            <legend>Message on my wearable</legend>
-            <p className="hint">People near you see this. Up to 16 characters per line.</p>
-            <label {...hover('Wearable message, first line')}>
-              First line
-              <input type="text" value={line1} maxLength={16} onChange={(e) => setLine1(e.target.value)} />
-            </label>
-            <label {...hover('Wearable message, second line')}>
-              Second line
-              <input type="text" value={line2} maxLength={16} onChange={(e) => setLine2(e.target.value)} />
-            </label>
-            <button type="button" className="secondary" onClick={saveDisplay} {...hover('Update wearable message')}>
-              Update wearable message
-            </button>
-          </fieldset>
-        </details>
+        <button
+          type="button"
+          className="settings-open"
+          ref={settingsBtnRef}
+          onClick={openSettings}
+          {...hover('Settings')}
+        >
+          <GearIcon />
+          <span>Settings</span>
+        </button>
       </main>
+
+      {settingsOpen && (
+        <div className="settings-screen" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+          <div className="settings-bar">
+            <button
+              type="button"
+              className="settings-close"
+              ref={closeBtnRef}
+              onClick={closeSettings}
+              {...hover('Close settings')}
+            >
+              <CloseIcon />
+              <span>Close settings</span>
+            </button>
+            <h2 id="settings-title">Settings</h2>
+          </div>
+          <div className="settings-body">
+
+              <label className="toggle" {...hover(`Hazard watch in Live guide. Warn me when something comes at me fast. ${hazardOn ? 'On' : 'Off'}`)}>
+                <input type="checkbox" checked={hazardOn} onChange={(e) => {
+                  setHazardOn(e.target.checked);
+                  const msg = e.target.checked ? 'Hazard warnings on in Live guide.' : 'Hazard warnings off.';
+                  setCaption(msg);
+                  speak(msg);
+                }} />
+                <span>Hazard watch (Live guide): warn me when something comes at me fast</span>
+              </label>
+
+              <fieldset className="display-fields">
+                <legend>Hazard warning sensitivity</legend>
+                <p className="hint">Higher warns earlier, but may warn more often.</p>
+                <div className="sensitivity" role="radiogroup" aria-label="Hazard warning sensitivity">
+                  {['low', 'normal', 'high'].map((level) => (
+                    <button
+                      key={level}
+                      type="button"
+                      role="radio"
+                      aria-checked={sensitivity === level}
+                      className="mode sens"
+                      onClick={() => setSensitivity(level)}
+                      {...hover(`Sensitivity ${level}`)}
+                    >
+                      <span className="mode-title">{level[0].toUpperCase() + level.slice(1)}</span>
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
+
+              <label className="toggle" {...hover(`Show detection boxes on the camera. ${showBoxes ? 'On' : 'Off'}`)}>
+                <input type="checkbox" checked={showBoxes} onChange={(e) => setShowBoxes(e.target.checked)} />
+                <span>Show detection boxes on the camera (for sighted helpers and demos)</span>
+              </label>
+
+              <label className="toggle" {...hover(`Read buttons aloud. ${readAloud ? 'On' : 'Off'}`)}>
+                <input type="checkbox" checked={readAloud} onChange={(e) => setReadAloud(e.target.checked)} />
+                <span>Read buttons aloud when I point at them</span>
+              </label>
+
+              <label className="toggle" {...hover(`Fall detection. ${fallDetection ? 'On' : 'Off'}`)}>
+                <input type="checkbox" checked={fallDetection} onChange={(e) => toggleFallDetection(e.target.checked)} />
+                <span>Fall detection, with a 30 second countdown before the alarm</span>
+              </label>
+
+              <fieldset className="display-fields">
+                <legend>Camera</legend>
+                <div className="sensitivity two" role="radiogroup" aria-label="Which camera to use">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={cameraSource === 'phone'}
+                    className="mode sens"
+                    onClick={() => chooseCamera('phone')}
+                    {...hover('Phone camera')}
+                  >
+                    <span className="mode-title">Phone</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={cameraSource === 'wearable'}
+                    className="mode sens"
+                    onClick={() => chooseCamera('wearable')}
+                    {...hover('Wearable camera')}
+                  >
+                    <span className="mode-title">Wearable</span>
+                  </button>
+                </div>
+                <p className="hint">
+                  {cameraSource === 'wearable'
+                    ? (wearableCam && !wearableCam.available
+                      ? `Wearable camera not found: ${wearableCam.error || 'check that it is plugged into the laptop.'}`
+                      : 'Press your button to hear what the wearable camera sees. Hazard watch needs the phone camera, so it pauses.')
+                    : 'Point your phone where you are walking.'}
+                </p>
+              </fieldset>
+
+              <label className="toggle" {...hover(`Natural voice. ${premiumVoice ? 'On' : 'Off'}`)}>
+                <input type="checkbox" checked={premiumVoice} onChange={(e) => setPremiumVoice(e.target.checked)} />
+                <span>Natural voice for everything (uses ElevenLabs credits)</span>
+              </label>
+
+              {premiumVoice && voices.length > 0 && (
+                <fieldset className="display-fields">
+                  <legend>Voice</legend>
+                  <label {...hover('Choose a voice')}>
+                    Choose a voice
+                    <select
+                      className="voice-select"
+                      value={voiceId}
+                      onChange={(e) => {
+                        setVoiceId(e.target.value);
+                        previewVoice(voices.find((v) => v.voice_id === e.target.value));
+                      }}
+                    >
+                      {voices.map((v) => (
+                        <option key={v.voice_id} value={v.voice_id}>{voiceLabel(v)}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => previewVoice(voices.find((v) => v.voice_id === voiceId))}
+                    {...hover('Play a sample of this voice')}
+                  >
+                    Play a sample
+                  </button>
+                </fieldset>
+              )}
+
+              <fieldset className="display-fields">
+                <legend>Message on my wearable</legend>
+                <p className="hint">People near you see this. Up to 16 characters per line.</p>
+                <label {...hover('Wearable message, first line')}>
+                  First line
+                  <input type="text" value={line1} maxLength={16} onChange={(e) => setLine1(e.target.value)} />
+                </label>
+                <label {...hover('Wearable message, second line')}>
+                  Second line
+                  <input type="text" value={line2} maxLength={16} onChange={(e) => setLine2(e.target.value)} />
+                </label>
+                <button type="button" className="secondary" onClick={saveDisplay} {...hover('Update wearable message')}>
+                  Update wearable message
+                </button>
+              </fieldset>
+          </div>
+        </div>
+      )}
 
       {fall === 'pending' && (
         <div className="alarm is-pending" role="alertdialog" aria-modal="true" aria-labelledby="fall-title" aria-describedby="fall-desc">

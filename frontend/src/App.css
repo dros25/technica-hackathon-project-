@@ -129,23 +129,6 @@ body {
 .status-alert { border-color: var(--coral); color: var(--coral-deep); }
 .status-alert .status-dot { background: var(--coral); }
 
-.settings-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 48px;
-  padding: 0 18px;
-  border: 0;
-  border-radius: 12px;
-  background: var(--lagoon);
-  color: #fff;
-  font: inherit;
-  font-size: 1.05rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-.settings-btn:hover { background: var(--ink); }
-
 /* ---------- Stage ---------- */
 .stage {
   flex: 1;
@@ -253,36 +236,32 @@ body {
   font-weight: 700;
 }
 
-/* What SightSea just said, laid over the bottom of the camera view */
+/* What SightSea just said, right below the camera view */
 .caption {
-  position: absolute;
-  left: 22px;
-  right: 22px;
-  bottom: 22px;
   display: flex;
   align-items: flex-start;
   gap: 14px;
-  padding: 14px 18px;
-  border-radius: 16px;
-  background: var(--glass);
-  color: #fff;
-  pointer-events: none; /* taps go through to the camera view */
-  -webkit-backdrop-filter: blur(6px);
-          backdrop-filter: blur(6px);
+  padding: 16px 18px;
+  border: 2px solid var(--line);
+  border-radius: 18px;
+  background: var(--shell);
+  color: var(--ink);
+  box-shadow: inset 7px 0 0 var(--lagoon);
 }
 .caption-icon {
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  width: 42px;
-  height: 42px;
-  border-radius: 10px;
+  width: 46px;
+  height: 46px;
+  margin-left: 6px;
+  border-radius: 12px;
   background: var(--mint);
   color: var(--lagoon);
 }
 .caption-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.caption-label { font-size: 0.9rem; font-weight: 700; color: #a9e7df; }
-.caption-text { font-size: clamp(1.15rem, 4.2vw, 1.45rem); font-weight: 700; line-height: 1.3; }
+.caption-label { font-size: 0.95rem; font-weight: 700; color: var(--ink-soft); }
+.caption-text { font-size: clamp(1.2rem, 4.4vw, 1.5rem); font-weight: 700; line-height: 1.3; }
 
 /* ---------- Mode switch ---------- */
 .modes {
@@ -326,23 +305,71 @@ body {
   .mode { flex-direction: column; align-items: flex-start; gap: 8px; }
 }
 
-/* ---------- Settings ---------- */
-.settings {
+/* ---------- Settings: its own full screen ---------- */
+.settings-open {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   width: 100%;
-  scroll-margin-top: 16px;
-  border: 2px solid var(--line);
-  border-radius: 16px;
+  min-height: 64px;
+  border: 3px solid var(--lagoon);
+  border-radius: 18px;
   background: var(--shell);
-}
-.settings summary {
-  padding: 18px 22px;
+  color: var(--lagoon);
+  font: inherit;
   font-size: 1.3rem;
   font-weight: 700;
   cursor: pointer;
-  list-style-position: inside;
 }
-.settings[open] summary { border-bottom: 2px solid var(--line); }
-.settings > :not(summary) { margin: 18px 22px; }
+.settings-open:hover { background: var(--lagoon); color: #fff; }
+
+.settings-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  overflow-y: auto;
+  background: var(--foam);
+  padding: 0 16px max(28px, env(safe-area-inset-bottom));
+}
+.settings-bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: max(14px, env(safe-area-inset-top)) 0 14px;
+  background: var(--foam);
+  border-bottom: 2px solid var(--line);
+}
+.settings-bar h2 { margin: 0; font-size: 1.7rem; }
+.settings-close {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 56px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--lagoon);
+  color: #fff;
+  font: inherit;
+  font-size: 1.15rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.settings-close:hover { background: var(--ink); }
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 720px;
+  margin: 0 auto;
+  padding-top: 20px;
+}
 
 .toggle {
   display: flex;
