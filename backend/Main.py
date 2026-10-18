@@ -27,6 +27,8 @@ from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
 
+from camera import Webcam, difference as camera_difference  # backend/camera.py
+
 load_dotenv()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -65,6 +67,7 @@ def key_tag(name):
 
 # ---------- AI clients (each one is optional so the server still boots) ----------
 gemini_client = None
+genai_types = None
 if os.getenv("GEMINI_API_KEY"):
     try:
         from google import genai
@@ -169,8 +172,6 @@ def load_hardware():
 
 
 hw = load_hardware()
-
-from camera import Webcam, difference as camera_difference  # noqa: E402  (backend/camera.py)
 
 # One USB webcam for both "point to ask" (the button) and the app's Wearable camera view
 webcam = Webcam()
@@ -429,6 +430,7 @@ FRONTEND_BUILD = next(
 app = Flask(__name__, static_folder=None)  # disable Flask's /static so React's /static/js works
 CORS(app)
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10 MB images max
+_sim_fall_timer = None  # simulated test countdown when no wearable is connected (see /test)
 
 
 @app.route("/health")
@@ -645,9 +647,6 @@ def alarm():
     on = bool((request.get_json(silent=True) or {}).get("on", False))
     hw.alarm(on)
     return jsonify({"status": "success", "on": on})
-
-
-_sim_fall_timer = None
 
 
 @app.route("/test/<event_type>", methods=["POST", "GET"])
