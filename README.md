@@ -1,6 +1,6 @@
 # SightSea
 
-**A guide for blind and low-vision people.** Hold up your phone, or wear a small camera on your chest or wrist, and SightSea tells you what's in your path and warns about anything coming at you fast. Point the camera at something and press a button to ask "what is this?". A small wearable detects falls and asks people nearby for help.
+**A guide for blind and low-vision people.** Wear your phone on your chest (or hold it up), or wear a small camera on your wrist, and SightSea tells you what's in your path and warns about anything coming at you fast. Point the camera at something and press a button to ask "what is this?". A small wearable detects falls and asks people nearby for help.
 
 Built at **Technica 2026** (University of Maryland) by a two-person team.
 
@@ -14,7 +14,7 @@ Built at **Technica 2026** (University of Maryland) by a two-person team.
 | 🌊 | **Live guide** | Watches your path and speaks only about your next few steps: "Chair ahead, two steps." "Stairs going down." It ignores carpets, side walls and room descriptions, and never repeats itself. |
 | ⚠️ | **Hazard watch** | Runs **on the phone, offline, in a fraction of a second**. Calm heads-ups first ("Someone is coming toward you", "Table ahead, in your path"), then an urgent chime and warning if something is about to hit you. A "looming" detector measures how fast parts of the view are expanding (time to contact), so it also catches things it can't name. Uses the phone camera. |
 | 👉 | **Point to ask** | Point the phone, or a wearable camera, at something and press the button: "That's a blue water bottle." Reads signs and labels too. |
-| 📷 | **Your choice of camera** | Use the phone's own camera (hold it and point), or a small USB camera worn on the chest, wrist or a cap, so your hands stay free. Switch in Settings. |
+| 📷 | **Your choice of camera** | Use the phone's own camera, worn on the chest in a holder or held and pointed, or a small USB camera worn on the wrist, chest or a cap. Switch in Settings. |
 | 🆘 | **Fall detection** | Accelerometer looks for free-fall or impact followed by stillness. A 30-second spoken countdown follows (double-press the button or tap "I'm okay" to cancel), then a buzzer and red LCD saying **"I've fallen! Please help me"** for people nearby. |
 | 🔆 | **Dark warning** | A light sensor warns when it's getting dark around you. |
 | 🪧 | **LCD for passersby** | Shows a message such as "Low vision / Thanks for help", editable from the app. |
@@ -57,7 +57,7 @@ Built at **Technica 2026** (University of Maryland) by a two-person team.
 - Arduino UNO R4 WiFi + Grove Base Shield (switch set to **5V**)
 - Grove: 3-axis accelerometer (MMA7660; ADXL345/LIS3DH also detected), light sensor (A0), button (D2), buzzer (D3), RGB LCD 16×2 (I2C)
 - Optional USB webcam, worn on the chest, wrist or a cap
-- A phone, and a power bank or the phone's USB-C to power the Arduino
+- A phone (with a chest strap or lanyard holder), and a power bank or the phone's USB-C to power the Arduino
 
 ---
 
