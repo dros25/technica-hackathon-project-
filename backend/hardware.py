@@ -13,7 +13,7 @@ Test:     python hardware.py          (prints events and which link is up, lets 
 Use from the Flask server:
     from hardware import Hardware
     hw = Hardware()                    # never fails: waits for USB and listens for Wi-Fi
-    hw.get_events()  -> [{"type": "button"}, {"type": "button_double"}, {"type": "button_hold"},
+    hw.get_events()  -> [{"type": "button"}, {"type": "button_double"}, {"type": "stop"}, {"type": "button_hold"},
                          {"type": "fall_pending", "seconds": 30},
                          {"type": "fall"} (alarm), {"type": "cancel"}, {"type": "dark"},
                          {"type": "connected", "link": "wifi"}, {"type": "disconnected"}, ...]
@@ -257,12 +257,10 @@ class Hardware:
             self._push({"type": "button"})          # press: describe what's ahead
         elif line == "BTN2":
             self._push({"type": "button_double"})   # double press: switch Tap / Live guide
-        elif line == "BTNHOLD":
-            self._push({"type": "button_hold"})     # hold: repeat the last thing said
-        elif line == "HELP":
-            self._push({"type": "help"})            # "I need help" held: alarm is sounding
         elif line == "STOP":
-            self._push({"type": "stop"})            # both buttons: stop everything
+            self._push({"type": "stop"})            # held 1-3 s: stop everything (silence)
+        elif line == "BTNHOLD":
+            self._push({"type": "button_hold"})     # held 3 s: repeat the last thing said
         elif line.startswith("FALL_PENDING"):
             try:
                 seconds = int(line.split(":", 1)[1])

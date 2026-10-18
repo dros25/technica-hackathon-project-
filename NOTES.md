@@ -61,18 +61,18 @@ Tuning lives in the "Tunables" blocks at the top of both files (time-to-contact 
 A USB webcam on the forearm, plugged into the laptop. With it connected, pressing the wearable button describes what the wrist camera sees; the **chest phone speaks** the answer (one voice). Without it, the button describes from the chest camera. Pick the camera with `WRIST_CAMERA=` in `.env`; check the aim at `http://localhost:5000/wrist/snapshot.jpg`.
 
 ### Wearable (`firmware/guardian/guardian.ino`, laptop side `backend/hardware.py`)
-Arduino UNO R4 WiFi + Grove shield: button 1 on D2, button 2 on D7 (optional), buzzer D3, light sensor A0, accelerometer and LCD on I2C. ("D7" = the shield socket wired to digital pin 7.) Fall = free-fall or impact, then stillness, then a **30 s countdown** (double-click the button or tap "I'm okay" to cancel), then the alarm.
+Arduino UNO R4 WiFi + Grove shield: button D2, buzzer D3, light sensor A0, accelerometer and LCD on I2C. ("D2" = the shield socket wired to digital pin 2.) Fall = free-fall or impact, then stillness, then a **30 s countdown** (double-click the button or tap "I'm okay" to cancel), then the alarm.
 
-**Buttons** (detected on the board; also listed in the app's Settings):
-| | Button 1 (D2, round) | Button 2 (D7, ridged) |
-|---|---|---|
-| Press | Describe what's ahead, instantly (wrist camera if connected, else chest phone) | Switch Tap mode / Live guide |
-| Hold ~1 s | Repeat the last thing said | (keep holding) |
-| Hold 3 s | | **I need help**: alarm + "Please help me" on the LCD; chirps each second while counting |
-| **Both together** | **Stop everything**: silence, drop answers still on the way, Live guide + hazard watch off ("Stopped.") | |
-| During a fall countdown or alarm | Double press either button cancels (a simultaneous squeeze of both counts as one press, so it can't cancel by accident) | single presses are ignored |
+**Button** (one button; patterns detected on the board, also listed in the app's Settings):
+| Press | Action |
+|---|---|
+| Press | Describe what's ahead (wrist camera if connected, else the chest phone) |
+| Double press | Switch Tap mode / Live guide (spoken) |
+| Hold 1–3 s, then let go | Stop everything: silence, drop answers still on the way, Live guide + hazard watch off ("Stopped.") |
+| Hold 3 s | Repeat the last thing said (fires at 3 s, while still held) |
+| During a fall countdown or alarm | Double press cancels; single presses and holds are ignored |
 
-"Stop everything" never cancels a fall/help alarm. The phone also has a **Stop everything** button.
+A single press acts ~0.4 s after release (it waits to rule out a double press). "Stop" happens on release, so holding on to 3 s gives repeat instead. Stop never cancels a fall alarm. The phone also has a **Stop everything** button. Timing constants: `MULTI_CLICK_MS`, `STOP_HOLD_MS`, `REPEAT_HOLD_MS` in the firmware.
 
 **One button only:** set `#define HAS_BUTTON2 0` at the top of the firmware (an empty pin reads random noise). Then: press = describe (acts ~0.4 s after release, to rule out a double), double press = switch mode, hold 1 s = repeat (on release), hold 3 s = help. Timing constants: `MULTI_CLICK_MS`, `HOLD_MS`, `HELP_HOLD_MS`.
 
@@ -97,7 +97,7 @@ Tips: the Arduino IDE Serial Monitor shows `WIFI:` lines (connecting, IP, not fo
 | `GET /events` | wearable and wrist events for the phone (button, fall, dark...) |
 | `/wrist/describe`, `/wrist/snapshot.jpg` | test the wrist camera |
 | `/lcd`, `/cancel`, `/alarm`, `/fall-detection` | wearable controls |
-| `/test/<fall\|button\|double\|hold\|help\|stop\|cancel\|dark>` | fake events for testing (real wearable if connected, else simulated) |
+| `/test/<fall\|button\|double\|stop\|hold\|cancel\|dark>` | fake events for testing (real wearable if connected, else simulated) |
 
 ---
 
@@ -115,7 +115,7 @@ Tips: the Arduino IDE Serial Monitor shows `WIFI:` lines (connecting, IP, not fo
 **Built**
 - Phone app: tap-to-describe, Live guide, hazard watch (object + looming), spoken warnings with follow-up names, settings, wearable message editor
 - Backend: Gemini with model fallback, ElevenLabs voice (optional), OpenRouter backup, wrist camera, `/identify`
-- Wearable: fall detection with countdown, "I need help" hold, light sensor, LCD, buzzer, two buttons (or one with press patterns); USB or Wi-Fi (phone hotspot, powered by the iPhone)
+- Wearable: fall detection with countdown, light sensor, LCD, buzzer, one button (press / double / hold to stop / hold 3 s to repeat); USB or Wi-Fi (phone hotspot, powered by the iPhone)
 - `start.bat` one-click setup and public link
 - Poster (design canvas in claude.ai)
 

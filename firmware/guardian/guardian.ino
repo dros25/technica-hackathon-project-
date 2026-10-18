@@ -3,8 +3,7 @@
   Board: Arduino UNO R4 WiFi + Grove Base Shield (set shield switch to 5V)
 
   Wiring (Grove cables):
-    Button 1          -> D2   (round: describe / repeat)
-    Button 2          -> D7   (optional, ridged: switch mode / hold 3 s = I need help)
+    Button            -> D2
     Buzzer            -> D3
     Light Sensor      -> A0
     3-Axis Accel      -> any I2C socket  (auto-detects ADXL345, LIS3DHTR, MMA7660)
@@ -20,7 +19,7 @@
   commands back on port 5006. With both USB and Wi-Fi up, the laptop uses USB and ignores the copies.
 
   Serial protocol (115200 baud, one message per line):
-    Arduino -> laptop:  BTN (describe) | BTN2 (switch mode) | BTNHOLD (repeat) | HELP (help alarm) | STOP (both buttons) | FALL_PENDING:<sec> | FALL (alarm) | CANCEL | LIGHT:<0-1023> | FALLDET:ON/OFF | READY | ERR:<msg>
+    Arduino -> laptop:  BTN (describe) | BTN2 (switch mode) | STOP (silence) | BTNHOLD (repeat) | FALL_PENDING:<sec> | FALL (alarm) | CANCEL | LIGHT:<0-1023> | FALLDET:ON/OFF | READY | ERR:<msg>
     Laptop -> Arduino:  LCD:<line1>|<line2>   ALARM:ON/OFF   TESTFALL   CANCEL   FALLDET:ON/OFF   PING
                         DIAG (accel status + I2C scan)   STREAM (toggle MAG:<g> output)
 */
@@ -36,11 +35,6 @@
 
 // ---------- Pins ----------
 const int BUTTON_PIN = 2;
-const int BUTTON2_PIN = 7;
-// Second button plugged into D7? Set to 0 if not: an empty pin reads random noise (= random presses).
-#ifndef HAS_BUTTON2
-#define HAS_BUTTON2 1
-#endif
 const int BUZZER_PIN = 3;
 const int LIGHT_PIN  = A0;
 
@@ -75,32 +69,19 @@ unsigned long pendingStart = 0;
 long lastShownSec = -1;
 unsigned long lastPressTime = 0;
 
-// Buttons. Two buttons:  B1 press = describe, B1 hold = repeat,
-//                        B2 press = switch mode, B2 hold 3 s = I need help,
-//                        both together = stop everything (quiet: no speech, Live guide off).
-//          One button:   press = describe, double = switch mode, hold 1 s = repeat (on release),
-//                        hold 3 s = I need help.
-// During a fall countdown or alarm: double press (either button) cancels; single presses are ignored.
-const unsigned long MULTI_CLICK_MS = 400;     // one-button mode: second press within this = double
-const unsigned long HOLD_MS        = 900;     // held this long = "hold" (repeat)
-const unsigned long HELP_HOLD_MS   = 3000;    // held this long = "I need help"
-
-struct Btn {
-  int pin;
-  int last;                  // debounced state
-  unsigned long lastChange;
-  unsigned long pressStart;  // 0 = not pressed
-  bool holdSent;
-  bool helpSent;
-  unsigned long lastChirp;
-  bool chord;                // part of a both-buttons press: no individual action
-};
-Btn b1 = {BUTTON_PIN, LOW, 0, 0, false, false, 0, false};
-Btn b2 = {BUTTON2_PIN, LOW, 0, 0, false, false, 0, false};
-bool stopSent = false;
-const Btn *lastPressBtn = nullptr;            // which button made the last press during a fall
-const unsigned long SQUEEZE_MS = 150;         // two buttons this close together = one squeeze
-int clickCount = 0;                           // one-button mode only
+// Button (one):  press = describe what's ahead
+//                 double press = switch Tap mode / Live guide
+//                 hold 1-3 s, then let go = stop everything (silence)
+//                 hold 3 s = repeat the last thing said (fires at 3 s, while still held)
+// During a fall countdown or alarm: double press cancels; single presses are ignored.
+const unsigned long MULTI_CLICK_MS = 400;     // a second press within this = double press
+const unsigned long STOP_HOLD_MS   = 1000;    // released after at least this long = stop
+const unsigned long REPEAT_HOLD_MS = 3000;    // held this long = repeat
+int lastButton = LOW;                         // Grove button reads HIGH when pressed
+unsigned long lastButtonChange = 0;
+unsigned long pressStart = 0;                 // when the current press began (0 = not pressed)
+bool repeatSent = false;
+int clickCount = 0;
 unsigned long lastRelease = 0;
 unsigned long chirpUntil = 0;
 Mode mode = NORMAL;
@@ -290,7 +271,7 @@ void triggerFall() {
   mode = PENDING;
   pendingStart = millis();
   clickCount = 0;
-  lastPressBtn = nullptr;
+  pressStart = 0;
   lastShownSec = -1;
   lastPressTime = 0;
   emit("FALL_PENDING:" + String(COUNTDOWN_MS / 1000));
@@ -305,20 +286,8 @@ void triggerAlarm() {
   lcd.setRGB(255, 0, 0);
 }
 
-// "I need help" held on the button: straight to the full alarm (no countdown)
-void requestHelp() {
-  mode = FALLEN;
-  lastPressTime = 0;
-  lastPressBtn = nullptr;
-  clickCount = 0;
-  emit("HELP");
-  showLines("I need help!", "Please help me");
-  lcd.setRGB(255, 0, 0);
-}
-
 void cancelFall() {
   mode = NORMAL;
-  lastPressBtn = nullptr;
   stillStart = 0;
   lastPressTime = 0;
   chirpUntil = 0;
@@ -401,87 +370,45 @@ void updateBuzzer(unsigned long now) {
 }
 
 // ---------- Button ----------
-// Which button calls for help when held: B2 if there are two, else the only one
-bool isHelpButton(const Btn &b) { return HAS_BUTTON2 ? (&b == &b2) : true; }
-
-void onRelease(Btn &b, unsigned long held, unsigned long now) {
-  if (HAS_BUTTON2) {
-    if (&b == &b1) {
-      if (!b.holdSent) emit("BTN");            // describe, instantly
-    } else if (held < HOLD_MS) {
-      emit("BTN2");                            // switch mode (a longer, aborted help-hold does nothing)
-    }
-    return;
-  }
-  // One button: count clicks; a medium hold = repeat
-  if (held >= HOLD_MS) { emit("BTNHOLD"); return; }
-  clickCount++;
-  lastRelease = now;
-  if (clickCount >= 2) { emit("BTN2"); clickCount = 0; }   // double press: act right away
-}
-
-void whileHeld(Btn &b, unsigned long now) {
-  unsigned long held = now - b.pressStart;
-  if (isHelpButton(b)) {
-    if (held >= HELP_HOLD_MS && !b.helpSent) { b.helpSent = true; requestHelp(); return; }
-    // Chirp each second past 1 s so the user knows the help hold is counting
-    if (held >= 1000 && now - b.lastChirp >= 1000) { b.lastChirp = now; chirpUntil = now + 60; }
-  }
-  if (HAS_BUTTON2 && &b == &b1 && held >= HOLD_MS && !b.holdSent) {
-    b.holdSent = true;
-    emit("BTNHOLD");                           // repeat (two-button mode: fires while held)
-  }
-}
-
-void updateOneButton(Btn &b, unsigned long now) {
-  int reading = digitalRead(b.pin);
+void updateButton(unsigned long now) {
+  int reading = digitalRead(BUTTON_PIN);
   bool falling = (mode == PENDING || mode == FALLEN);
-  if (reading != b.last && now - b.lastChange > 50) {   // debounced change
-    b.lastChange = now;
-    b.last = reading;
+  if (reading != lastButton && now - lastButtonChange > 50) {   // debounced change
+    lastButtonChange = now;
+    lastButton = reading;
     if (reading == HIGH) {  // pressed
       if (falling) {
-        // During a fall only a double-click cancels (either button), so a stray press can't.
-        // Both buttons hit at the same instant (e.g. squeezing the handle while falling) is
-        // ONE press, not a double press.
-        bool squeeze = lastPressBtn != nullptr && lastPressBtn != &b && now - lastPressTime < SQUEEZE_MS;
-        if (!squeeze) {
-          if (lastPressTime != 0 && now - lastPressTime <= DOUBLE_CLICK_MS) cancelFall();
-          else { lastPressTime = now; lastPressBtn = &b; }
-        }
-        b.pressStart = 0;
+        // During a fall only a double-click cancels, so a stray press can't
+        if (lastPressTime != 0 && now - lastPressTime <= DOUBLE_CLICK_MS) cancelFall();
+        else lastPressTime = now;
         return;
       }
       if (mode == IMPACT) { mode = NORMAL; stillStart = 0; }  // they're moving the button: fine
-      b.pressStart = now;
-      b.holdSent = false;
-      b.helpSent = false;
-      b.lastChirp = now;
-      b.chord = false;
+      pressStart = now;
+      repeatSent = false;
     } else {                // released
-      if (!falling && b.pressStart != 0 && !b.helpSent && !b.chord) onRelease(b, now - b.pressStart, now);
-      b.pressStart = 0;
-      b.chord = false;
+      if (!falling && pressStart != 0 && !repeatSent) {
+        unsigned long held = now - pressStart;
+        if (held >= STOP_HOLD_MS) {
+          clickCount = 0;
+          emit("STOP");                               // held 1-3 s: stop everything
+        } else {
+          clickCount++;
+          lastRelease = now;
+          if (clickCount >= 2) { emit("BTN2"); clickCount = 0; }  // double press: right away
+        }
+      }
+      pressStart = 0;
     }
   }
-  if (b.pressStart != 0 && b.last == HIGH && !b.chord && !(mode == PENDING || mode == FALLEN)) whileHeld(b, now);
-}
-
-void updateButton(unsigned long now) {
-  updateOneButton(b1, now);
-  if (HAS_BUTTON2) updateOneButton(b2, now);
-  // Both buttons down together = stop everything (not during an alarm: that needs a double press)
-  if (HAS_BUTTON2) {
-    bool both = b1.pressStart != 0 && b2.pressStart != 0;
-    if (both && !stopSent && !b1.helpSent && !b2.helpSent && mode != PENDING && mode != FALLEN) {
-      stopSent = true;
-      b1.chord = b2.chord = true;   // their own press/hold/help actions are cancelled
-      emit("STOP");
-    }
-    if (b1.last == LOW && b2.last == LOW) stopSent = false;
+  // Held 3 s: repeat (fires while still held)
+  if (pressStart != 0 && !repeatSent && lastButton == HIGH && !falling && now - pressStart >= REPEAT_HOLD_MS) {
+    repeatSent = true;
+    clickCount = 0;
+    emit("BTNHOLD");
   }
-  // One-button mode: a single press with no second one in time
-  if (!HAS_BUTTON2 && clickCount == 1 && b1.pressStart == 0 && now - lastRelease > MULTI_CLICK_MS) {
+  // One press and no second one in time: describe
+  if (clickCount == 1 && pressStart == 0 && now - lastRelease > MULTI_CLICK_MS) {
     clickCount = 0;
     emit("BTN");
   }
@@ -643,7 +570,6 @@ void setup() {
   unsigned long waitStart = millis();
   while (!Serial && millis() - waitStart < 3000) {}  // R4: catch startup messages
   pinMode(BUTTON_PIN, INPUT);
-  if (HAS_BUTTON2) pinMode(BUTTON2_PIN, INPUT);
   pinMode(BUZZER_PIN, OUTPUT);
   Wire.begin();
 
