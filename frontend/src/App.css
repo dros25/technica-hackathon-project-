@@ -18,6 +18,9 @@
 }
 
 * { box-sizing: border-box; }
+/* No double-tap-to-zoom: double tap means "use this button" */
+html, body { touch-action: manipulation; }
+button, label, input, select, summary, a { touch-action: manipulation; }
 
 body {
   margin: 0;

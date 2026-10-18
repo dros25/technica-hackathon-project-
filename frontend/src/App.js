@@ -16,7 +16,8 @@ const api = (path, options = {}) =>
 const LIVE_INTERVAL_MS = 2500;   // how often live mode checks the camera
 const LIVE_CHANGE = 12;          // how different a frame must be (0-255) to send it
 const LIVE_RECHECK_MS = 20000;   // re-check even an unchanged scene this often
-const HOVER_REPEAT_MS = 1500;    // don't repeat the same hover label too quickly
+const HOVER_REPEAT_MS = 1500;
+const DOUBLE_TAP_MS = 500;       // two taps on the same control within this = use it    // don't repeat the same hover label too quickly
 const QUIET_AFTER_HAZARD_MS = 3000; // live narration waits this long after a hazard alert
 
 // Spoken the moment something happens, so they're generated ahead of time in the chosen voice
@@ -174,6 +175,7 @@ export default function App() {
   const [fallDetection, setFallDetection] = useState(() => loadSetting('fallDetection', true));
   const [cameraReady, setCameraReady] = useState(false);
   const [readAloud, setReadAloud] = useState(() => loadSetting('readAloud', true));
+  const [doubleTap, setDoubleTap] = useState(() => loadSetting('doubleTap', true));
   const [premiumVoice, setPremiumVoice] = useState(() => loadSetting('premiumVoice', true));
   const [line1, setLine1] = useState(() => loadSetting('line1', 'Low vision'));
   const [line2, setLine2] = useState(() => loadSetting('line2', 'Thanks for help'));
@@ -205,6 +207,8 @@ export default function App() {
   const fallSpokenRef = useRef(new Set());
   const fallDetectionRef = useRef(fallDetection);
   const readAloudRef = useRef(readAloud);
+  const doubleTapRef = useRef(doubleTap);
+  const tapRef = useRef({ pointer: 'mouse', control: null, at: 0, allowControl: null, allowUntil: 0, hints: 0 });
   const premiumRef = useRef(premiumVoice);
   const cameraMsgRef = useRef('The camera is starting. Try again in a moment.');
   const speechRef = useRef({ id: 0, priority: null });
@@ -393,7 +397,55 @@ export default function App() {
       lastHoverRef.current = { text: label, at: now };
       speak(label, 'low');
     };
-    return { onMouseEnter: say, onFocus: say };
+    return { onMouseEnter: say, onFocus: say, 'data-say': label };
+  }, [speak]);
+
+  // Tap once to hear, double-tap to use (touch only, like VoiceOver).
+  // Mouse users already hear labels on hover; keyboard activation (Enter/Space) is untouched.
+  // Emergency controls marked data-direct (the fall alarm's "I'm okay") always work on one tap.
+  useEffect(() => {
+    doubleTapRef.current = doubleTap;
+    saveSetting('doubleTap', doubleTap);
+  }, [doubleTap]);
+
+  useEffect(() => {
+    const onDown = (e) => { tapRef.current.pointer = e.pointerType; };
+    const onClick = (e) => {
+      const t = tapRef.current;
+      if (!doubleTapRef.current) return;
+      if (t.pointer !== 'touch' && t.pointer !== 'pen') return;
+      if (e.detail === 0) return; // keyboard or programmatic click
+      if (e.target.closest('input[type="text"], select, textarea')) return; // typing/choosing works on one tap
+      const control = e.target.closest('button, [role="radio"], label, summary, a');
+      if (!control || control.closest('[data-direct]')) return;
+      const now = Date.now();
+      // the activating tap (and the click a label forwards to its checkbox) goes through
+      if (t.allowControl === control && now < t.allowUntil) return;
+      if (t.control === control && now - t.at < DOUBLE_TAP_MS) {
+        t.control = null;
+        t.allowControl = control;
+        t.allowUntil = now + 400;
+        return;
+      }
+      // first tap: just say what it is
+      e.preventDefault();
+      e.stopPropagation();
+      t.control = control;
+      t.at = now;
+      const label = control.getAttribute('data-say') || control.getAttribute('aria-label')
+        || (control.innerText || '').replace(/\s+/g, ' ').trim();
+      if (label) {
+        const hint = t.hints < 3 ? ' Double tap to use.' : '';
+        t.hints += 1;
+        speak(label.replace(/[.!?]?$/, '.') + hint);
+      }
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    document.addEventListener('click', onClick, true);
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('click', onClick, true);
+    };
   }, [speak]);
 
   // Instant warning tone: Web Audio starts in ~1 ms, speech can take 100-300 ms to begin
@@ -1028,6 +1080,11 @@ export default function App() {
                 <span>Show detection boxes on the camera (for sighted helpers and demos)</span>
               </label>
 
+              <label className="toggle" {...hover(`Tap once to hear, double tap to use. ${doubleTap ? 'On' : 'Off'}`)}>
+                <input type="checkbox" checked={doubleTap} onChange={(e) => setDoubleTap(e.target.checked)} />
+                <span>Tap once to hear a button, double-tap to use it (turn off if you use VoiceOver or TalkBack)</span>
+              </label>
+
               <label className="toggle" {...hover(`Read buttons aloud. ${readAloud ? 'On' : 'Off'}`)}>
                 <input type="checkbox" checked={readAloud} onChange={(e) => setReadAloud(e.target.checked)} />
                 <span>Read buttons aloud when I point at them</span>
@@ -1132,7 +1189,7 @@ export default function App() {
             The alarm sounds in {secondsLeft} {secondsLeft === 1 ? 'second' : 'seconds'}.
             Double-click your button to cancel.
           </p>
-          <button type="button" className="alarm-ok" onClick={imOkay} autoFocus {...hover("I'm okay. Cancel the alarm")}>
+          <button type="button" className="alarm-ok" data-direct onClick={imOkay} autoFocus {...hover("I'm okay. Cancel the alarm")}>
             I'm okay
           </button>
         </div>
@@ -1142,7 +1199,7 @@ export default function App() {
         <div className="alarm" role="alertdialog" aria-modal="true" aria-labelledby="alarm-title" aria-describedby="alarm-desc">
           <h2 id="alarm-title">Alarm on</h2>
           <p id="alarm-desc">Your wearable is asking people nearby for help. Double-click your button to stop it.</p>
-          <button type="button" className="alarm-ok" onClick={imOkay} autoFocus {...hover("I'm okay. Stop the alarm")}>
+          <button type="button" className="alarm-ok" data-direct onClick={imOkay} autoFocus {...hover("I'm okay. Stop the alarm")}>
             I'm okay
           </button>
         </div>
