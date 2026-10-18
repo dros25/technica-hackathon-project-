@@ -281,7 +281,11 @@ class Hardware:
 
     def _handle_line(self, line):
         if line == "BTN":
-            self._push({"type": "button"})
+            self._push({"type": "button"})          # press: describe what's ahead
+        elif line == "BTN2":
+            self._push({"type": "button_double"})   # double press: switch Tap / Live guide
+        elif line == "STOP":
+            self._push({"type": "stop"})            # held 1 s+, let go: stop talking
         elif line.startswith("FALL_PENDING"):
             try:
                 seconds = int(line.split(":", 1)[1])

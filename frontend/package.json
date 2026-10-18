@@ -1,5 +1,5 @@
 {
-  "name": "guardian-frontend",
+  "name": "sightsea-frontend",
   "version": "0.1.0",
   "private": true,
   "proxy": "http://localhost:5000",

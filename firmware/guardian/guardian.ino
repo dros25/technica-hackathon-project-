@@ -109,6 +109,11 @@ String line2 = "Thanks for help";
 
 int lastButton = LOW;              // Grove button reads HIGH when pressed
 unsigned long lastButtonChange = 0;
+const unsigned long MULTI_CLICK_MS = 400;  // a second press within this = double press
+const unsigned long STOP_HOLD_MS = 1000;   // held at least this long, then released = stop
+unsigned long pressStart = 0;              // when the current press began (0 = not pressed)
+int clickCount = 0;
+unsigned long lastRelease = 0;
 
 unsigned long lastAccelRead = 0;
 unsigned long lastLightSend = 0;
@@ -260,6 +265,7 @@ void triggerFall() {
   pendingStart = millis();
   lastShownSec = -1;
   lastPressTime = 0;
+  clickCount = 0;
   out.print("FALL_PENDING:");
   out.println(COUNTDOWN_MS / 1000);
   lcd.setRGB(255, 160, 0);  // amber while counting down
@@ -357,21 +363,44 @@ void updateBuzzer(unsigned long now) {
 }
 
 // ---------- Button ----------
+// Button:  press = describe what's ahead (always a fresh look)
+//          double press = switch Tap mode / Live guide
+//          hold 1 s or more, then let go = stop talking (and turn Live guide off)
+// During a fall countdown or alarm: only a double press counts (it cancels).
 void updateButton(unsigned long now) {
   int reading = digitalRead(BUTTON_PIN);
-  if (reading != lastButton && now - lastButtonChange > 50) {
+  bool falling = (mode == PENDING || mode == FALLEN);
+  if (reading != lastButton && now - lastButtonChange > 50) {  // debounced change
     lastButtonChange = now;
     lastButton = reading;
     if (reading == HIGH) {  // pressed
-      if (mode == PENDING || mode == FALLEN) {
+      if (falling) {
         // During a fall only a double-click cancels, so a stray press can't
         if (lastPressTime != 0 && now - lastPressTime <= DOUBLE_CLICK_MS) cancelFall();
         else lastPressTime = now;
+        pressStart = 0;
+        return;
+      }
+      if (mode == IMPACT) { mode = NORMAL; stillStart = 0; }  // they're moving the button: fine
+      pressStart = now;
+    } else if (pressStart != 0) {  // released
+      unsigned long held = now - pressStart;
+      pressStart = 0;
+      if (held >= STOP_HOLD_MS) {
+        clickCount = 0;
+        out.println("STOP");
+      } else if (++clickCount >= 2) {
+        clickCount = 0;
+        out.println("BTN2");
       } else {
-        if (mode == IMPACT) { mode = NORMAL; stillStart = 0; }  // they're moving the button: fine
-        out.println("BTN");
+        lastRelease = now;
       }
     }
+  }
+  // One press and no second one in time: describe
+  if (clickCount == 1 && pressStart == 0 && now - lastRelease > MULTI_CLICK_MS) {
+    clickCount = 0;
+    out.println("BTN");
   }
 }
 

@@ -261,7 +261,11 @@ def describe_image(image_bytes, mime="image/jpeg", prompt=NARRATE_PROMPT):
     if MOCK_VISION:
         if "NOTHING" in prompt:  # live mode: usually quiet
             return ("NOTHING" if int(time.time()) % 3 else "A person is walking toward you on the right."), "mock"
-        return "Mock description: a clear hallway ahead, with a chair on your left.", "mock"
+        scenes = ["a clear hallway ahead, with a chair on your left.",
+                  "a door about three steps ahead, slightly to the right.",
+                  "a table in front of you with a cup on it.",
+                  "two people standing ahead on the left."]
+        return f"Test mode, fake description: {scenes[int(time.time()) % len(scenes)]}", "mock"
 
     errors = []
     if gemini_client:
@@ -699,11 +703,12 @@ def alarm():
 
 @app.route("/test/<event_type>", methods=["POST", "GET"])
 def test_event(event_type):
-    """Fake events for testing the frontend: /test/fall, /test/button, /test/cancel, /test/dark.
+    """Fake events for testing the frontend: /test/fall, /test/button, /test/double, /test/stop,
+    /test/cancel, /test/dark.
     With the wearable connected, fall/cancel go to the real device; otherwise they're simulated."""
     global _sim_fall_timer
-    if event_type not in ("fall", "button", "cancel", "dark"):
-        return jsonify({"error": "use fall, button, cancel or dark"}), 400
+    if event_type not in ("fall", "button", "double", "stop", "cancel", "dark"):
+        return jsonify({"error": "use fall, button, double, stop, cancel or dark"}), 400
     mock = getattr(hw, "is_mock", False)
     live = getattr(hw, "connected", False) and not mock
     if event_type == "fall":
@@ -725,7 +730,7 @@ def test_event(event_type):
                 _sim_fall_timer.cancel()
             push_event({"type": "cancel"})
     else:
-        hw.inject(event_type)
+        hw.inject({"double": "button_double"}.get(event_type, event_type))
     return jsonify({"status": "sent", "event": event_type, "wearable": "live" if live else "simulated"})
 
 

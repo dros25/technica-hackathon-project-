@@ -1,4 +1,4 @@
-# Guardian one-click start (Windows)
+# SightSea one-click start (Windows)
 #
 # Double-click start.bat (or run: powershell -ExecutionPolicy Bypass -File start.ps1)
 #   - checks Node.js, Python and ngrok, and installs any that are missing (winget)
@@ -141,7 +141,7 @@ if (-not $SkipBuild -or -not (Test-Path $BuildDir)) {
 }
 
 # ---------- 5. Free port 5000 / stop old copies ----------
-Step "Starting Guardian"
+Step "Starting SightSea"
 $old = Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue
 if ($old) {
     Warn "Something is already using port 5000 - stopping it so the new backend can start."
@@ -178,7 +178,7 @@ if (-not $public) { Fail "ngrok didn't give a link. Check the ngrok window for t
 try { Set-Clipboard -Value $public } catch {}
 Write-Host ""
 Write-Host "  ============================================================" -ForegroundColor Green
-Write-Host "   Guardian is live:  $public" -ForegroundColor Green
+Write-Host "   SightSea is live:  $public" -ForegroundColor Green
 Write-Host "   (copied to your clipboard - open it on any phone, anywhere)" -ForegroundColor Green
 Write-Host "  ============================================================" -ForegroundColor Green
 Write-Host ""

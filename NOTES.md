@@ -65,7 +65,9 @@ A USB webcam on the forearm, plugged into the laptop. With it connected, pressin
 The same webcam also powers **Settings > Camera > Wearable**: the app's camera view shows it (`/camera/stream`) and Tap / Live guide describe from it (`/narrate` with `source=wearable`; the server skips the AI when the view hasn't changed). Hazard watch needs the phone's own video, so it pauses in that mode. One module (`camera.py`) serves both, so they never fight over the camera.
 
 ### Wearable (`firmware/guardian/guardian.ino`, laptop side `backend/hardware.py`)
-Arduino UNO R4 WiFi + Grove shield: button D2, buzzer D3, light sensor A0, accelerometer and LCD on I2C. Fall = free-fall or impact, then stillness, then a **30 s countdown** (double-click the button or tap "I'm okay" to cancel), then the alarm. Pressing the button (outside a fall) = "describe what's ahead" on the phone.
+Arduino UNO R4 WiFi + Grove shield: button D2, buzzer D3, light sensor A0, accelerometer and LCD on I2C. Fall = free-fall or impact, then stillness, then a **30 s countdown** (double-click the button or tap "I'm okay" to cancel), then the alarm. Button (outside a fall): **press** = describe what's ahead (always a fresh look); **double press** = switch Tap mode / Live guide; **hold 1 s and let go** = stop talking (and Live guide off). There's no "repeat the last thing" gesture: it made a normal press sound like it repeated itself.
+
+**Work on `main` only.** `hazard-watch` is merged and no longer used: `git checkout main && git pull`. Anything pushed to `hazard-watch` after a merge is missing the newer work on `main`.
 
 It talks to the laptop over **USB, Wi-Fi, or both** (same messages either way; USB wins when both are up, so nothing is handled twice). The app's status shows which: "Online, wearable on Wi-Fi / USB".
 
@@ -91,7 +93,7 @@ USB always works too: plug the cable in and the laptop uses it first. If the lin
 | `GET /events` | wearable and wrist events for the phone (button, fall, dark...) |
 | `/wrist/describe`, `/wrist/snapshot.jpg` | test the wrist camera |
 | `/lcd`, `/cancel`, `/alarm`, `/fall-detection` | wearable controls |
-| `/test/<fall\|button\|cancel\|dark>` | fake events for testing (real wearable if connected, else simulated) |
+| `/test/<fall\|button\|double\|stop\|cancel\|dark>` | fake events for testing (real wearable if connected, else simulated) |
 
 ---
 

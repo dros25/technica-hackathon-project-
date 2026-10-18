@@ -49,14 +49,15 @@ const UI_PHRASES = [
 
 function loadSetting(key, fallback) {
   try {
-    const v = localStorage.getItem('guardian.' + key);
+    let v = localStorage.getItem('sightsea.' + key);
+    if (v === null) v = localStorage.getItem('guardian.' + key); // settings saved under the old name
     return v === null ? fallback : JSON.parse(v);
   } catch {
     return fallback;
   }
 }
 function saveSetting(key, value) {
-  try { localStorage.setItem('guardian.' + key, JSON.stringify(value)); } catch { /* private mode */ }
+  try { localStorage.setItem('sightsea.' + key, JSON.stringify(value)); } catch { /* private mode */ }
 }
 
 function grabFrame(video, maxWidth) {
@@ -222,6 +223,10 @@ export default function App() {
   const cameraSourceRef = useRef(cameraSource);
   const lastHoverRef = useRef({ text: '', at: 0 });
   const liveRef = useRef({ text: '', at: 0, sig: null });
+  const modeRef = useRef('tap');
+  const chooseModeRef = useRef(null);  // the wearable's double press switches modes
+  const stopRef = useRef(null);        // the wearable's long press stops everything
+  const stoppedAtRef = useRef(0);      // answers asked for before this moment are dropped
 
   useEffect(() => { readAloudRef.current = readAloud; saveSetting('readAloud', readAloud); }, [readAloud]);
   useEffect(() => { premiumRef.current = premiumVoice; saveSetting('premiumVoice', premiumVoice); }, [premiumVoice]);
@@ -544,6 +549,7 @@ export default function App() {
   // ---------- Describe the scene ----------
   const describe = useCallback(async (kind = 'tap') => {
     if (busyRef.current) return;
+    const startedAt = Date.now();
     // Wearable camera: the server grabs the frame from the USB webcam plugged into it
     const fromWearable = cameraSourceRef.current === 'wearable';
     const canvas = fromWearable ? null : grabFrame(videoRef.current, 640);
@@ -573,6 +579,7 @@ export default function App() {
       const res = await api('/narrate', { method: 'POST', body: form });
       const data = await res.json().catch(() => ({ error: `The server sent back something unexpected (${res.status}).` }));
       if (!res.ok || data.error) throw new Error(data.error || `Server error ${res.status}`);
+      if (stoppedAtRef.current > startedAt) return; // stopped while it was coming
 
       if (kind === 'live') {
         liveRef.current.at = Date.now();
@@ -788,6 +795,7 @@ export default function App() {
     return () => clearInterval(timer);
   }, [mode]);
 
+  useEffect(() => { modeRef.current = mode; }, [mode]);
   const chooseMode = (next) => {
     if (next === mode) return;
     setMode(next);
@@ -798,6 +806,17 @@ export default function App() {
       : 'Tap mode on. Tap the camera view or press your button to hear what is ahead.';
     setCaption(msg);
     speak(msg);
+  };
+  chooseModeRef.current = chooseMode;
+
+  // Wearable long press: stop talking, drop answers on their way, Live guide off
+  stopRef.current = () => {
+    stoppedAtRef.current = Date.now();
+    wristPendingRef.current = 0;
+    stopSpeaking();
+    if (modeRef.current === 'live') setMode('tap');
+    setCaption('Stopped. Press the button to hear what is ahead, or double press for Live guide.');
+    speak('Stopped.');
   };
 
   // ---------- Fall countdown ----------
@@ -873,14 +892,20 @@ export default function App() {
         }
         (data.events || []).forEach((ev) => {
           if (ev.type === 'button') {
-            describeRef.current('tap');
+            describeRef.current('tap'); // always a fresh look
+          } else if (ev.type === 'button_double') {
+            if (chooseModeRef.current) chooseModeRef.current(modeRef.current === 'live' ? 'tap' : 'live');
+          } else if (ev.type === 'stop') {
+            if (stopRef.current) stopRef.current();
           } else if (ev.type === 'wrist_looking') {
             // Wearable button + webcam: the laptop is describing what the hand points at
             wristPendingRef.current = Date.now();
             if (navigator.vibrate) navigator.vibrate(60);
             setCaption('Looking where you are pointing…');
           } else if (ev.type === 'wrist_description') {
+            const asked = wristPendingRef.current;
             wristPendingRef.current = 0;
+            if (!asked && Date.now() - stoppedAtRef.current < 15000) return; // stopped while it was coming
             setCaption(ev.text);
             speak(ev.text); // 'high': never cuts off a hazard warning
           } else if (ev.type === 'wrist_error') {
