@@ -977,14 +977,16 @@ export default function App() {
 
   // ---------- Wearable events ----------
   useEffect(() => {
+    // Long poll: the server answers as soon as something happens (or after 20 s), then we ask again.
+    // Instant alerts, ~3 requests a minute instead of 60 (ngrok's free plan counts every request).
     let since = null; // number of the last event this page has seen
-    let busy = false; // a slow poll must not overlap the next one (it would repeat events)
-    const timer = setInterval(async () => {
-      if (busy) return;
-      busy = true;
+    let stopped = false;
+    const poll = async () => {
+      let ok = true;
       try {
-        const res = await api(since === null ? '/events' : `/events?since=${since}`);
+        const res = await api(since === null ? '/events' : `/events?since=${since}&wait=20`);
         const data = await res.json();
+        if (stopped) return;
         if (typeof data.last === 'number') since = data.last;
         setOnline(true);
         setWearable({ connected: data.connected !== false, mock: !!data.mock, link: data.link || null });
@@ -1039,12 +1041,13 @@ export default function App() {
           }
         });
       } catch {
-        setOnline(false);
-      } finally {
-        busy = false;
+        ok = false;
+        if (!stopped) setOnline(false);
       }
-    }, 1000);
-    return () => clearInterval(timer);
+      if (!stopped) setTimeout(poll, ok ? 50 : 2000); // server down: retry every 2 s
+    };
+    poll();
+    return () => { stopped = true; };
   }, [speak, stopSpeaking, startCountdown, soundAlarm, sendFallDetection]);
 
   const imOkay = async () => {

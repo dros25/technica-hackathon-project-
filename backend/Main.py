@@ -674,19 +674,29 @@ _event_log_lock = threading.Lock()
 
 @app.route("/events", methods=["GET"])
 def events():
+    """Long poll: with ?since=N&wait=S the server holds the request until there's a new event (or the
+    wearable connects/disconnects), for up to S seconds. Instant alerts, far fewer requests (ngrok
+    counts every one)."""
     global _event_seq
-    with _event_log_lock:
-        for ev in _collect_new_events():
-            _event_seq += 1
-            _event_log.append((_event_seq, ev))
-        since = request.args.get("since", type=int)
-        if since is None:
-            out = []  # a page's first poll: start from now, don't replay old alerts
-        else:
-            if since > _event_seq:  # server restarted since that page last asked
-                since = 0
-            out = [ev for n, ev in _event_log if n > since]
-        last = _event_seq
+    since_arg = request.args.get("since", type=int)
+    wait = max(0.0, min(request.args.get("wait", default=0, type=float), 25.0))
+    deadline = time.time() + wait
+    link_before = (getattr(hw, "connected", True), getattr(hw, "link", None))
+    while True:
+        with _event_log_lock:
+            for ev in _collect_new_events():
+                _event_seq += 1
+                _event_log.append((_event_seq, ev))
+            if since_arg is None:
+                out = []  # a page's first poll: start from now, don't replay old alerts
+            else:
+                since = 0 if since_arg > _event_seq else since_arg  # 0: server restarted meanwhile
+                out = [ev for n, ev in _event_log if n > since]
+            last = _event_seq
+        link_now = (getattr(hw, "connected", True), getattr(hw, "link", None))
+        if out or since_arg is None or time.time() >= deadline or link_now != link_before:
+            break
+        time.sleep(0.15)
     return jsonify({
         "events": out,
         "last": last,
@@ -809,4 +819,4 @@ def frontend(path):
 
 if __name__ == "__main__":
     # use_reloader=False is required: the reloader would open the Arduino's serial port twice
-    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False, threaded=True)
