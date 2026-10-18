@@ -2,7 +2,7 @@
 
 **A hands-free guide for blind and low-vision people.** A phone worn on the chest describes what's ahead and warns about anything coming at you fast. A wrist camera answers "what am I pointing at?". A small wearable detects falls and asks people nearby for help.
 
-Built at **Technica 2026** (University of Maryland) by a team of two first-time hackers.
+Built at **Technica 2026** (University of Maryland) by a two-person team.
 
 ---
 
