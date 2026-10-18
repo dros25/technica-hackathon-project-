@@ -236,7 +236,9 @@ class Hardware:
             try:
                 raw = self._link.readline()
                 if not raw:
-                    if time.time() - self._last_line > SILENCE_S:
+                    # only WiFi needs a silence check: an unplugged USB cable raises an error by itself,
+                    # and reopening USB restarts the Arduino (which then goes quiet while joining WiFi)
+                    if self._link.kind == "wifi" and time.time() - self._last_line > SILENCE_S:
                         raise OSError(f"no data for {SILENCE_S} s")
                     continue
             except (serial.SerialException, OSError) as e:
@@ -305,7 +307,9 @@ class Hardware:
                 self._push({"type": "dark", "value": self.light})
             self._was_dark = is_dark
         else:
-            if line.startswith("WIFI:"):
+            if line == "WIFI:RETRY":
+                print("[hardware] Arduino is trying to join WiFi again (not on WiFi yet)")
+            elif line.startswith("WIFI:"):
                 print(f"[hardware] Arduino is on WiFi at {line[5:]}")
             else:
                 print(f"[arduino] {line}")  # READY, ERR:..., I2C:... etc.

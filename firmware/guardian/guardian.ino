@@ -461,7 +461,10 @@ void updateNet(unsigned long now) {
   lastNetPoll = now;
   if (WiFi.status() != WL_CONNECTED) {
     // retry in the background, but never in the middle of a fall countdown or alarm
-    if (mode == NORMAL && now - lastWifiTry > 15000) wifiConnect();
+    if (mode == NORMAL && now - lastWifiTry > 60000) {
+      out.println("WIFI:RETRY");  // joining blocks a few seconds; say so first
+      wifiConnect();
+    }
     return;
   }
   WiFiClient c = netServer.available();
