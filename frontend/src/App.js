@@ -216,7 +216,13 @@ export default function App() {
   const tapRef = useRef({ pointer: 'mouse', control: null, at: 0, allowControl: null, allowUntil: 0, hints: 0 });
   const premiumRef = useRef(premiumVoice);
   const cameraMsgRef = useRef('The camera is starting. Try again in a moment.');
-  const speechRef = useRef({ id: 0, priority: null });
+  // What's being said right now. "priority" expires by itself: phones (iPhones especially)
+  // sometimes never report that speech finished, which used to leave the app silent for good.
+  const speechRef = useRef({
+    id: 0, p: null, until: 0,
+    get priority() { return this.p && Date.now() < this.until ? this.p : null; },
+    set priority(v) { this.p = v; this.until = v ? Date.now() + 15000 : 0; },
+  });
   const voiceRef = useRef(voiceId);
   const ttsRef = useRef(new Map());      // "voice|text" -> Promise<audio URL>
   const ttsReadyRef = useRef(new Set()); // keys whose audio is already downloaded
@@ -303,7 +309,8 @@ export default function App() {
     });
   };
 
-  const speak = useCallback((text, priority = 'high') => {
+  // instant: say it right now (a tap on a control): natural voice only if it's already saved
+  const speak = useCallback((text, priority = 'high', instant = false) => {
     if (!text) return;
     const s = speechRef.current;
     if (priority === 'low' && s.priority && s.priority !== 'low') return;
@@ -311,11 +318,13 @@ export default function App() {
     stopAll();
     const id = ++s.id;
     s.priority = priority;
+    // long enough to say it (about 12 characters a second), plus time to fetch the natural voice
+    s.until = Date.now() + (priority === 'urgent' ? 1500 : 4000) + text.length * 90;
     if (!premiumRef.current) return deviceSay(text, priority, id);
 
     const key = `${voiceRef.current}|${text}`;
     // Hazard warnings can't wait for the network: natural voice only if it's already cached
-    if (priority === 'urgent' && !ttsReadyRef.current.has(key)) {
+    if ((priority === 'urgent' || instant) && !ttsReadyRef.current.has(key)) {
       naturalAudio(text).catch(() => {}); // ready for next time
       return deviceSay(text, priority, id);
     }
@@ -446,7 +455,7 @@ export default function App() {
       if (label) {
         const hint = t.hints < 3 ? ' Double tap to use.' : '';
         t.hints += 1;
-        speak(label.replace(/[.!?]?$/, '.') + hint);
+        speak(label.replace(/[.!?]?$/, '.') + hint, 'high', true);
       }
     };
     document.addEventListener('pointerdown', onDown, true);
