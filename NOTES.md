@@ -74,8 +74,6 @@ Arduino UNO R4 WiFi + Grove shield: button D2, buzzer D3, light sensor A0, accel
 
 A single press acts ~0.4 s after release (it waits to rule out a double press). "Stop" happens on release, so holding on to 3 s gives repeat instead. Stop never cancels a fall alarm. The phone also has a **Stop everything** button. Timing constants: `MULTI_CLICK_MS`, `STOP_HOLD_MS`, `REPEAT_HOLD_MS` in the firmware.
 
-**One button only:** set `#define HAS_BUTTON2 0` at the top of the firmware (an empty pin reads random noise). Then: press = describe (acts ~0.4 s after release, to rule out a double), double press = switch mode, hold 1 s = repeat (on release), hold 3 s = help. Timing constants: `MULTI_CLICK_MS`, `HOLD_MS`, `HELP_HOLD_MS`.
-
 It talks to the laptop over **USB, Wi-Fi, or both** (same messages either way; USB wins when both are up, so nothing is handled twice). The app's status shows which: "Online, wearable on Wi-Fi / USB".
 
 #### Wireless setup (no laptop on your back)
