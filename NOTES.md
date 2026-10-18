@@ -104,6 +104,7 @@ USB always works too: plug the cable in and the laptop uses it first. If the lin
 - Before starting work: `git checkout main && git pull`, then read this file.
 - After changing anything, update this file and write a clear commit message. That's how the other person's assistant finds out what changed.
 - Never commit `backend/.env`. Check `git status` before pushing.
+- **Finished branches (safe to delete):** `hazard-watch` (merged Sat ~10 pm), `buttons` (pull request #1, scrapped: `main` already has the button work), `fall-detection` (pull request #2, merged Sun ~1 am: wrist fall detection). Delete a finished branch on GitHub from its pull request page ("Delete branch") or the repo's Branches page (trash icon); locally with `git branch -d <name>` while on `main`.
 
 ---
 
