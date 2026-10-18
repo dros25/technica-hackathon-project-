@@ -20,7 +20,6 @@ const MARGIN = SEARCH + BLOCK + 1;
 // and ~0.2 s ago (slow approaches, more precise), alternating; each zone keeps the sooner one.
 const BASELINES_S = [0.1, 0.2];
 const FRESH_S = 0.2;        // a result from the other baseline counts if this recent
-const HISTORY_S = 0.6;
 const MIN_TEXTURE = 6;       // patch std-dev; flat walls/sky can't be tracked
 const MAX_SAD = 14;          // mean abs difference per pixel for a believable match
 export const ZONES = [[0, 1 / 3], [1 / 3, 2 / 3], [2 / 3, 1]];
