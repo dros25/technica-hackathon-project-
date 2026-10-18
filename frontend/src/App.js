@@ -331,7 +331,7 @@ export default function App() {
       ctx.strokeStyle = color;
       ctx.lineWidth = tr.threat ? 5 : 3;
       ctx.strokeRect(x, y, w, h);
-      const label = tr.label + (tr.ttc ? ` ${tr.ttc.toFixed(1)}s` : '');
+      const label = (tr.refinedName || tr.label) + (tr.ttc ? ` ${tr.ttc.toFixed(1)}s` : '');
       ctx.fillStyle = color;
       ctx.fillRect(x, y - 20, ctx.measureText(label).width + 10, 20);
       ctx.fillStyle = '#031b2e';

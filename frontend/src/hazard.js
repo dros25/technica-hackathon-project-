@@ -9,28 +9,57 @@
 // The growth rate of the box's (log) size is 1 / time-to-collision, so we get
 // "contact in ~1.5 s" without knowing the real distance.
 
-import { FilesetResolver, ObjectDetector } from '@mediapipe/tasks-vision';
+import { FilesetResolver, ImageClassifier, ObjectDetector } from '@mediapipe/tasks-vision';
 
 // Keep the wasm version identical to the npm package version above.
 const WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
 const MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite';
+// Second, finer model (1,000 categories: "tiger", "water bottle"...). Runs only on the box being warned about.
+const CLASSIFIER_URL =
+  'https://storage.googleapis.com/mediapipe-models/image_classifier/efficientnet_lite0/float32/1/efficientnet_lite0.tflite';
 
-// Things worth warning about. ttc = seconds-to-contact that triggers an alert.
-// rank = priority when several things approach at once (higher wins).
+// The detector knows 80 everyday categories. These get special timing/priority/names;
+// everything else uses DEFAULT_CLASS and a tidied-up version of its label.
+// ttc = seconds-to-contact that triggers an alert. rank = priority (higher wins).
+// refine = let the fine classifier rename it ("cat" -> "tiger"); off for people, vehicles,
+// and dogs (it would read out breed names).
 const CLASSES = {
-  car:          { name: 'Car',       ttc: 3.0, rank: 3 },
-  bus:          { name: 'Bus',       ttc: 3.0, rank: 3 },
-  truck:        { name: 'Truck',     ttc: 3.0, rank: 3 },
-  motorcycle:   { name: 'Motorbike', ttc: 3.0, rank: 3 },
-  bicycle:      { name: 'Bike',      ttc: 3.0, rank: 3 },
-  person:       { name: 'Person',    ttc: 2.0, rank: 2 },
-  dog:          { name: 'Dog',       ttc: 2.0, rank: 2 },
+  car:          { name: 'Car',       ttc: 3.0, rank: 3, refine: false },
+  bus:          { name: 'Bus',       ttc: 3.0, rank: 3, refine: false },
+  truck:        { name: 'Truck',     ttc: 3.0, rank: 3, refine: false },
+  train:        { name: 'Train',     ttc: 3.0, rank: 3, refine: false },
+  motorcycle:   { name: 'Motorbike', ttc: 3.0, rank: 3, refine: false },
+  bicycle:      { name: 'Bike',      ttc: 3.0, rank: 3, refine: false },
+  person:       { name: 'Person',    ttc: 2.0, rank: 2, refine: false },
+  dog:          { name: 'Dog',       ttc: 2.0, rank: 2, refine: false },
   horse:        { name: 'Horse',     ttc: 2.5, rank: 2 },
+  cow:          { name: 'Cow',       ttc: 2.5, rank: 2 },
+  bear:         { name: 'Bear',      ttc: 2.5, rank: 2 },
+  elephant:     { name: 'Elephant',  ttc: 2.5, rank: 2 },
+  cat:          { name: 'Cat',       ttc: 2.0, rank: 2 },
   skateboard:   { name: 'Skateboard', ttc: 2.0, rank: 2 },
   'sports ball': { name: 'Ball',     ttc: 1.5, rank: 1 },
-  frisbee:      { name: 'Frisbee',   ttc: 1.5, rank: 1 },
+  'dining table': { name: 'Table',   ttc: 1.5, rank: 1 },
+  'potted plant': { name: 'Plant',   ttc: 1.5, rank: 1 },
+  'cell phone': { name: 'Phone',     ttc: 1.5, rank: 1 },
+  tv:           { name: 'TV',        ttc: 1.5, rank: 1 },
 };
+const DEFAULT_CLASS = { ttc: 1.5, rank: 1 };
+const REFINE_MIN_SCORE = 0.3;    // classifier must be at least this sure to rename something
+
+function classInfo(label) {
+  const known = CLASSES[label];
+  if (known) return { refine: true, ...known };
+  const name = label.charAt(0).toUpperCase() + label.slice(1);
+  return { ...DEFAULT_CLASS, name, refine: true };
+}
+
+// "tiger, Panthera tigris" -> "Tiger"
+function tidyLabel(raw) {
+  const first = String(raw || '').split(',')[0].replace(/_/g, ' ').trim();
+  return first ? first.charAt(0).toUpperCase() + first.slice(1) : '';
+}
 
 export const SENSITIVITY = { low: 0.7, normal: 1.0, high: 1.4 };
 
@@ -82,6 +111,7 @@ export class HazardWatcher {
     this.onFrame = onFrame;
     this.onStats = onStats;
     this.detector = null;
+    this.classifier = null;
     this.running = false;
     this.sensitivity = 1;
     this.tracks = [];
@@ -108,6 +138,7 @@ export class HazardWatcher {
       return;
     }
     if (!this.running) return; // stopped while loading
+    if (!this.classifier && !this.classifierLoading) this._loadClassifier(); // in the background
     this.tracks = [];
     this.stalled = false;
     this.lastFrameAt = performance.now();
@@ -131,7 +162,6 @@ export class HazardWatcher {
       runningMode: 'VIDEO',
       scoreThreshold: MIN_SCORE,
       maxResults: 10,
-      categoryAllowlist: Object.keys(CLASSES),
     });
     try {
       return await ObjectDetector.createFromOptions(vision, opts('GPU'));
@@ -139,6 +169,52 @@ export class HazardWatcher {
       console.warn('[hazard] GPU unavailable, using CPU', e);
       return ObjectDetector.createFromOptions(vision, opts('CPU'));
     }
+  }
+
+  // Optional: if it fails, warnings just use the detector's own (coarser) names
+  async _loadClassifier() {
+    this.classifierLoading = true;
+    try {
+      const vision = await FilesetResolver.forVisionTasks(WASM_URL);
+      const opts = (delegate) => ({
+        baseOptions: { modelAssetPath: CLASSIFIER_URL, delegate },
+        runningMode: 'IMAGE',
+        maxResults: 1,
+        scoreThreshold: REFINE_MIN_SCORE,
+      });
+      try {
+        this.classifier = await ImageClassifier.createFromOptions(vision, opts('GPU'));
+      } catch (e) {
+        this.classifier = await ImageClassifier.createFromOptions(vision, opts('CPU'));
+      }
+    } catch (e) {
+      console.warn('[hazard] fine classifier unavailable, using detector names only', e);
+    } finally {
+      this.classifierLoading = false;
+    }
+  }
+
+  // Look closer at one box (~10-30 ms): "Cat" -> "Tiger", "Bottle" -> "Water bottle"
+  _refine(tr, cls) {
+    if (!this.classifier || !cls.refine || tr.refinedName !== undefined) return tr.refinedName || cls.name;
+    tr.refinedName = null;
+    try {
+      const pad = 0.05;
+      const b = tr.box;
+      const roi = {
+        left: Math.max(0, b.x1 - pad), top: Math.max(0, b.y1 - pad),
+        right: Math.min(1, b.x2 + pad), bottom: Math.min(1, b.y2 + pad),
+      };
+      const res = this.classifier.classify(this.video, { regionOfInterest: roi });
+      const top = res.classifications && res.classifications[0] && res.classifications[0].categories[0];
+      if (top && top.score >= REFINE_MIN_SCORE) {
+        const name = tidyLabel(top.displayName || top.categoryName);
+        if (name && name.length <= 24) tr.refinedName = name;
+      }
+    } catch (e) {
+      console.warn('[hazard] refine failed', e);
+    }
+    return tr.refinedName || cls.name;
   }
 
   _schedule() {
@@ -194,7 +270,7 @@ export class HazardWatcher {
     const dets = [];
     for (const d of detections) {
       const cat = d.categories && d.categories[0];
-      if (!cat || !CLASSES[cat.categoryName] || cat.score < MIN_SCORE) continue;
+      if (!cat || !cat.categoryName || cat.score < MIN_SCORE) continue;
       const b = d.boundingBox;
       dets.push({
         label: cat.categoryName,
@@ -247,7 +323,7 @@ export class HazardWatcher {
       const cxAtContact = cx + vx * Math.min(ttc, 3);
       const onCourse = (x1 < CENTER_BAND[1] && x2 > CENTER_BAND[0]) || Math.abs(cxAtContact - 0.5) < 0.2;
 
-      const cls = CLASSES[tr.label];
+      const cls = classInfo(tr.label);
       const limit = cls.ttc * this.sensitivity;
       if (onCourse && ttc < limit) {
         tr.hits += 1;
@@ -275,7 +351,8 @@ export class HazardWatcher {
     this.lastAlert = { at: nowMs, rank: cls.rank };
     const cx = tr.box.cx;
     const direction = cx < 0.38 ? 'left' : cx > 0.62 ? 'right' : 'ahead';
-    this.onAlert({ label: tr.label, name: cls.name, direction, ttc: Math.round(ttc * 10) / 10, rank: cls.rank });
+    const name = this._refine(tr, cls);
+    this.onAlert({ label: tr.label, name, direction, ttc: Math.round(ttc * 10) / 10, rank: cls.rank });
   }
 
   _addSample(tr, d, t) {
