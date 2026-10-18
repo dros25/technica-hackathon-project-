@@ -826,15 +826,6 @@ export default function App() {
   }, [settingsOpen, speak]);
 
   // ---------- Labels ----------
-  const status = online === false
-    ? { text: 'Offline', tone: 'alert' }
-    : online === null
-      ? { text: 'Connecting', tone: 'quiet' }
-      : !wearable.connected
-        ? { text: 'Wearable disconnected', tone: 'alert' }
-        : wearable.mock
-          ? { text: 'Demo wearable', tone: 'ok' }
-          : { text: 'Wearable connected', tone: 'ok' };
 
   const hazardPill = {
     off: {
@@ -891,12 +882,6 @@ export default function App() {
             SightSea
           </h1>
           <p className="tagline">Your visual guide</p>
-        </div>
-        <div className="topbar-actions">
-          <p className={`status status-${status.tone}`} {...hover(status.text)} tabIndex={0}>
-            <span className="status-dot" aria-hidden="true" />
-            {status.text}
-          </p>
         </div>
       </header>
 
