@@ -91,6 +91,14 @@ const GLOBAL_GAP_MS = 1200;     // min gap between any two alerts (unless more u
 const CENTER_BAND = [0.3, 0.7]; // "in front of you" (fraction of frame width)
 const STALL_MS = 2500;          // no frames for this long = camera/model stalled
 
+// Gentler heads-up: a person (or dog, bike) walking toward you at a normal pace, well before
+// they'd count as a collision threat. Said once per person, in a calm voice.
+const NOTICE_LABELS = { person: 'Someone', dog: 'A dog', bicycle: 'A bike', cat: 'A cat' };
+const NOTICE_TTC = 6.0;         // approaching: contact within this many seconds at this pace
+const NOTICE_MIN_SIZE = 0.12;   // and already a fair size in view (not far down the hall)
+const NOTICE_FRAMES = 5;        // held this many frames in a row (~0.2 s), so a sway doesn't count
+const NOTICE_COOLDOWN_MS = 8000;
+
 function iou(a, b) {
   const x1 = Math.max(a.x1, b.x1), y1 = Math.max(a.y1, b.y1);
   const x2 = Math.min(a.x2, b.x2), y2 = Math.min(a.y2, b.y2);
@@ -367,6 +375,11 @@ export class HazardWatcher {
 
       const cls = classInfo(tr.label);
       const limit = cls.ttc * this.sensitivity;
+      if (NOTICE_LABELS[tr.label] && onCourse && size >= NOTICE_MIN_SIZE && ttc < NOTICE_TTC * this.sensitivity) {
+        tr.noticeHits = (tr.noticeHits || 0) + 1;
+      } else {
+        tr.noticeHits = 0;
+      }
       if (onCourse && ttc < limit) {
         tr.hits += 1;
         tr.threat = tr.hits >= CONFIRM_FRAMES || ttc < URGENT_FRACTION * limit;
@@ -382,7 +395,7 @@ export class HazardWatcher {
     if (this.onFrame) this.onFrame({ tracks: this.tracks, vw, vh, loom: this.loomZones });
 
     // 4. Decide whether to alert
-    if (!best) return;
+    if (!best) { this._maybeNotice(); return; }
     const nowMs = performance.now();
     const { tr, cls, ttc } = best;
     if (nowMs - tr.alertedAt < TRACK_COOLDOWN_MS) return;
@@ -401,6 +414,20 @@ export class HazardWatcher {
       needsName: !PLAIN_LABELS.has(tr.label) && !tr.refinedName,
       region: { x1: tr.raw.x1, y1: tr.raw.y1, x2: tr.raw.x2, y2: tr.raw.y2 },
     });
+  }
+
+  // No collision threat: maybe a calm "someone is coming toward you"
+  _maybeNotice() {
+    const nowMs = performance.now();
+    if (nowMs - this.lastAlert.at < GLOBAL_GAP_MS) return;
+    const tr = this.tracks.find((t) => (t.noticeHits || 0) >= NOTICE_FRAMES
+      && nowMs - (t.noticedAt || -1e9) > NOTICE_COOLDOWN_MS && nowMs - (t.alertedAt || -1e9) > NOTICE_COOLDOWN_MS);
+    if (!tr) return;
+    tr.noticedAt = nowMs;
+    this.lastAlert = { at: nowMs, rank: 0 };
+    const cx = tr.box.cx;
+    const direction = cx < 0.38 ? 'left' : cx > 0.62 ? 'right' : 'ahead';
+    this.onAlert({ kind: 'notice', label: tr.label, name: NOTICE_LABELS[tr.label], direction, rank: 0, needsName: false });
   }
 
   // Something is expanding fast in a zone, whatever it is: warn first, name it after

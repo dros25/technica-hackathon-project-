@@ -614,6 +614,14 @@ export default function App() {
   hazardHandlersRef.current.onAlert = (a) => {
     if (fallRef.current) return; // the fall alarm owns the screen and voice
     lastHazardRef.current = Date.now();
+    if (a.kind === 'notice') { // calm heads-up, not a collision warning
+      const where = a.direction === 'ahead' ? 'ahead of you' : `on your ${a.direction}`;
+      const text = `${a.name} is coming toward you, ${where}.`;
+      if (navigator.vibrate) navigator.vibrate(80);
+      setCaption(text);
+      speak(text, 'high');
+      return;
+    }
     const big = a.rank >= 3;
     beep(big ? 2 : 1);
     if (navigator.vibrate) navigator.vibrate(big ? [200, 80, 200, 80, 200] : [150, 60, 150]);
@@ -800,7 +808,9 @@ export default function App() {
     if (next === mode) return;
     setMode(next);
     const msg = next === 'live'
-      ? (hazardOn
+      ? (cameraSource === 'wearable'
+        ? "Live guide on, using the wearable camera. Hazard watch needs the phone camera, so it's paused."
+        : hazardOn
         ? "Live guide on. I'll warn you if something comes at you fast, and speak when something new appears."
         : "Live guide on. I'll speak when something new appears.")
       : 'Tap mode on. Tap the camera view or press your button to hear what is ahead.';
