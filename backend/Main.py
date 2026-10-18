@@ -53,6 +53,12 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 ELEVEN_VOICE_ID = os.getenv("ELEVEN_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")
 ELEVEN_MODEL = os.getenv("ELEVEN_MODEL", "eleven_flash_v2_5")  # fast + uses fewer credits
 
+def key_tag(name):
+    """Last 4 characters of a key, so you can tell WHOSE key a laptop is using without exposing it."""
+    value = (os.getenv(name) or "").strip()
+    return f"...{value[-4:]}" if len(value) >= 8 else None
+
+
 # ---------- AI clients (each one is optional so the server still boots) ----------
 gemini_client = None
 if os.getenv("GEMINI_API_KEY"):
@@ -60,7 +66,7 @@ if os.getenv("GEMINI_API_KEY"):
         from google import genai
         from google.genai import types as genai_types
         gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-        print(f"[ai] Gemini ready ({GEMINI_MODEL})")
+        print(f"[ai] Gemini ready ({GEMINI_MODEL}, key {key_tag('GEMINI_API_KEY')})")
     except Exception as e:
         print(f"[ai] Gemini unavailable: {e}")
 
@@ -70,7 +76,7 @@ if os.getenv("OPENROUTER_API_KEY"):
         from openai import OpenAI
         openrouter_client = OpenAI(base_url="https://openrouter.ai/api/v1",
                                    api_key=os.getenv("OPENROUTER_API_KEY"))
-        print("[ai] OpenRouter fallback ready")
+        print(f"[ai] OpenRouter fallback ready (key {key_tag('OPENROUTER_API_KEY')})")
     except Exception as e:
         print(f"[ai] OpenRouter unavailable: {e}")
 
@@ -79,7 +85,7 @@ if os.getenv("ELEVENLABS_API_KEY"):
     try:
         from elevenlabs.client import ElevenLabs
         eleven_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
-        print("[ai] ElevenLabs ready")
+        print(f"[ai] ElevenLabs ready (key {key_tag('ELEVENLABS_API_KEY')})")
     except Exception as e:
         print(f"[ai] ElevenLabs unavailable: {e}")
 
@@ -347,6 +353,13 @@ def health():
         "hardware": "mock" if getattr(hw, "is_mock", False) else "arduino",
         "gemini": bool(gemini_client),
         "elevenlabs": bool(eleven_client),
+        # Which keys THIS laptop loaded (last 4 characters only)
+        "keys": {
+            "gemini": key_tag("GEMINI_API_KEY") if gemini_client else None,
+            "elevenlabs": key_tag("ELEVENLABS_API_KEY") if eleven_client else None,
+            "openrouter": key_tag("OPENROUTER_API_KEY") if openrouter_client else None,
+        },
+        "mock_vision": MOCK_VISION,
         "frontend_build": bool(FRONTEND_BUILD),
         "wrist_camera": wrist.available,
     })
