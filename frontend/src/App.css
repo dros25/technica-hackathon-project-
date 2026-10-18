@@ -391,6 +391,25 @@ html, body, #root { height: 100%; overflow: hidden; overscroll-behavior: none; }
   padding-top: 20px;
 }
 
+/* Wearable button guide (Settings) */
+.button-guide {
+  border: 2px solid var(--line);
+  border-radius: 12px;
+  background: var(--shell);
+  padding: 14px 16px;
+}
+.button-guide-title { font-weight: 700; margin-bottom: 8px; color: var(--ink); }
+.button-guide dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  font-size: 1.05rem;
+  color: var(--ink);
+}
+.button-guide dt { font-weight: 700; color: var(--lagoon); }
+.button-guide dd { margin: 0; }
+
 .toggle {
   display: flex;
   align-items: center;

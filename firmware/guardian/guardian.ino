@@ -12,7 +12,7 @@
   Library: "Grove - LCD RGB Backlight" (Arduino IDE > Library Manager)
 
   Serial protocol (115200 baud, one message per line):
-    Arduino -> laptop:  BTN | FALL_PENDING:<sec> | FALL (alarm) | CANCEL | LIGHT:<0-1023> | FALLDET:ON/OFF | READY | ERR:<msg>
+    Arduino -> laptop:  BTN (describe) | BTN2 (switch mode) | STOP (silence) | BTNHOLD (repeat) | FALL_PENDING:<sec> | FALL (alarm) | CANCEL | LIGHT:<0-1023> | FALLDET:ON/OFF | READY | ERR:<msg>
     (Same protocol over USB serial and over WiFi TCP port 5005.)  WIFI:<ip> is sent once on connect.
     Laptop -> Arduino:  LCD:<line1>|<line2>   ALARM:ON/OFF   TESTFALL   CANCEL   FALLDET:ON/OFF   PING
                         DIAG (accel status + I2C scan)   STREAM (toggle MAG:<g> output)
@@ -109,6 +109,19 @@ String line2 = "Thanks for help";
 
 int lastButton = LOW;              // Grove button reads HIGH when pressed
 unsigned long lastButtonChange = 0;
+
+// Button:  press = describe what's ahead
+//          double press = switch Tap mode / Live guide
+//          hold 1-3 s, then let go = stop everything (silence)
+//          hold 3 s = repeat the last thing said (fires at 3 s, while still held)
+// During a fall countdown or alarm: double press cancels; single presses and holds are ignored.
+const unsigned long MULTI_CLICK_MS = 400;     // a second press within this = double press
+const unsigned long STOP_HOLD_MS   = 1000;    // released after at least this long = stop
+const unsigned long REPEAT_HOLD_MS = 3000;    // held this long = repeat
+unsigned long pressStart = 0;                 // when the current press began (0 = not pressed)
+bool repeatSent = false;
+int clickCount = 0;
+unsigned long lastRelease = 0;
 
 unsigned long lastAccelRead = 0;
 unsigned long lastLightSend = 0;
@@ -258,6 +271,8 @@ void showNormal() {
 void triggerFall() {
   mode = PENDING;
   pendingStart = millis();
+  clickCount = 0;            // forget a half-finished press pattern
+  pressStart = 0;
   lastShownSec = -1;
   lastPressTime = 0;
   out.print("FALL_PENDING:");
@@ -359,19 +374,45 @@ void updateBuzzer(unsigned long now) {
 // ---------- Button ----------
 void updateButton(unsigned long now) {
   int reading = digitalRead(BUTTON_PIN);
-  if (reading != lastButton && now - lastButtonChange > 50) {
+  bool falling = (mode == PENDING || mode == FALLEN);
+  if (reading != lastButton && now - lastButtonChange > 50) {   // debounced change
     lastButtonChange = now;
     lastButton = reading;
     if (reading == HIGH) {  // pressed
-      if (mode == PENDING || mode == FALLEN) {
+      if (falling) {
         // During a fall only a double-click cancels, so a stray press can't
         if (lastPressTime != 0 && now - lastPressTime <= DOUBLE_CLICK_MS) cancelFall();
         else lastPressTime = now;
-      } else {
-        if (mode == IMPACT) { mode = NORMAL; stillStart = 0; }  // they're moving the button: fine
-        out.println("BTN");
+        return;
       }
+      if (mode == IMPACT) { mode = NORMAL; stillStart = 0; }  // they're moving the button: fine
+      pressStart = now;
+      repeatSent = false;
+    } else {                // released
+      if (!falling && pressStart != 0 && !repeatSent) {
+        unsigned long held = now - pressStart;
+        if (held >= STOP_HOLD_MS) {
+          clickCount = 0;
+          out.println("STOP");                        // held 1-3 s: stop everything
+        } else {
+          clickCount++;
+          lastRelease = now;
+          if (clickCount >= 2) { out.println("BTN2"); clickCount = 0; }  // double press: right away
+        }
+      }
+      pressStart = 0;
     }
+  }
+  // Held 3 s: repeat (fires while still held)
+  if (pressStart != 0 && !repeatSent && lastButton == HIGH && !falling && now - pressStart >= REPEAT_HOLD_MS) {
+    repeatSent = true;
+    clickCount = 0;
+    out.println("BTNHOLD");
+  }
+  // One press and no second one in time: describe
+  if (clickCount == 1 && pressStart == 0 && now - lastRelease > MULTI_CLICK_MS) {
+    clickCount = 0;
+    out.println("BTN");
   }
 }
 

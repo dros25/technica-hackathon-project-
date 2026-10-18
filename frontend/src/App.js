@@ -221,6 +221,11 @@ export default function App() {
   const ttsReadyRef = useRef(new Set()); // keys whose audio is already downloaded
   const cameraSourceRef = useRef(cameraSource);
   const lastHoverRef = useRef({ text: '', at: 0 });
+  // Wearable button: hold 3 s = repeat, double press = switch mode, hold 1 s = stop everything
+  const lastSaidRef = useRef('');
+  const modeRef = useRef('tap');
+  const chooseModeRef = useRef(null);
+  const stoppedAtRef = useRef(0);      // answers that started before a "stop" are dropped
   const liveRef = useRef({ text: '', at: 0, sig: null });
 
   useEffect(() => { readAloudRef.current = readAloud; saveSetting('readAloud', readAloud); }, [readAloud]);
@@ -306,6 +311,7 @@ export default function App() {
     stopAll();
     const id = ++s.id;
     s.priority = priority;
+    if (priority !== 'low') lastSaidRef.current = text; // for "hold 3 s to repeat"
     if (!premiumRef.current) return deviceSay(text, priority, id);
 
     const key = `${voiceRef.current}|${text}`;
@@ -544,6 +550,7 @@ export default function App() {
   // ---------- Describe the scene ----------
   const describe = useCallback(async (kind = 'tap') => {
     if (busyRef.current) return;
+    const startedAt = Date.now();
     // Wearable camera: the server grabs the frame from the USB webcam plugged into it
     const fromWearable = cameraSourceRef.current === 'wearable';
     const canvas = fromWearable ? null : grabFrame(videoRef.current, 640);
@@ -573,6 +580,7 @@ export default function App() {
       const res = await api('/narrate', { method: 'POST', body: form });
       const data = await res.json().catch(() => ({ error: `The server sent back something unexpected (${res.status}).` }));
       if (!res.ok || data.error) throw new Error(data.error || `Server error ${res.status}`);
+      if (stoppedAtRef.current > startedAt) return; // "stop everything" was pressed meanwhile
 
       if (kind === 'live') {
         liveRef.current.at = Date.now();
@@ -606,6 +614,7 @@ export default function App() {
 
   hazardHandlersRef.current.onAlert = (a) => {
     if (fallRef.current) return; // the fall alarm owns the screen and voice
+    if (Date.now() - stoppedAtRef.current < 1500) return; // just stopped: Live guide is switching off
     lastHazardRef.current = Date.now();
     const big = a.rank >= 3;
     beep(big ? 2 : 1);
@@ -636,6 +645,7 @@ export default function App() {
       const res = await api('/identify', { method: 'POST', body: form });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.name || Date.now() - at > 6000 || fallRef.current) return; // too late to matter
+      if (stoppedAtRef.current > at) return; // "stop everything" was pressed meanwhile
       const article = /^[aeiou]/i.test(data.name) ? 'an' : 'a';
       setCaption(`${warning} It's ${article} ${data.name}.`);
       speakWhenFree(`It's ${article} ${data.name}.`);
@@ -799,6 +809,21 @@ export default function App() {
     setCaption(msg);
     speak(msg);
   };
+  useEffect(() => { modeRef.current = mode; }, [mode]);
+  chooseModeRef.current = chooseMode; // lets the wearable button switch modes (double press)
+
+  // Wearable button held 1 s: silence, drop answers still on their way, Live guide off.
+  // Never cancels a fall alarm (that needs a double press or "I'm okay").
+  const stopEverything = () => {
+    stoppedAtRef.current = Date.now();
+    wristPendingRef.current = 0;
+    stopSpeaking();
+    if (modeRef.current === 'live') setMode('tap');
+    setCaption('Stopped. Double press the button to turn Live guide back on.');
+    speak('Stopped.');
+  };
+  const stopRef = useRef(null);
+  stopRef.current = stopEverything;
 
   // ---------- Fall countdown ----------
   const startCountdown = useCallback((seconds) => {
@@ -872,7 +897,16 @@ export default function App() {
           sendFallDetection(fallDetectionRef.current);
         }
         (data.events || []).forEach((ev) => {
-          if (ev.type === 'button') {
+          if (ev.type === 'button_double') {
+            // Wearable: double press switches Tap mode <-> Live guide
+            if (chooseModeRef.current) chooseModeRef.current(modeRef.current === 'live' ? 'tap' : 'live');
+          } else if (ev.type === 'stop') {
+            if (stopRef.current) stopRef.current(); // wearable: held 1 s
+          } else if (ev.type === 'button_hold') {
+            // Wearable: held 3 s repeats the last thing said
+            const last = lastSaidRef.current;
+            if (last) { setCaption(last); speak(last); } else speak('Nothing to repeat yet.');
+          } else if (ev.type === 'button') {
             describeRef.current('tap');
           } else if (ev.type === 'wrist_looking') {
             // Wearable button + webcam: the laptop is describing what the hand points at
@@ -880,7 +914,9 @@ export default function App() {
             if (navigator.vibrate) navigator.vibrate(60);
             setCaption('Looking where you are pointing…');
           } else if (ev.type === 'wrist_description') {
+            const asked = wristPendingRef.current;
             wristPendingRef.current = 0;
+            if (asked && stoppedAtRef.current > asked) return; // stopped while it was coming
             setCaption(ev.text);
             speak(ev.text); // 'high': never cuts off a hazard warning
           } else if (ev.type === 'wrist_error') {
@@ -1124,6 +1160,17 @@ export default function App() {
             <h2 id="settings-title">Settings</h2>
           </div>
           <div className="settings-body">
+
+              <div className="button-guide" tabIndex={0} {...hover('Wearable button. Press to describe what is ahead. Double press to switch between tap mode and live guide. Hold one second and let go to stop everything. Hold three seconds to repeat the last thing said. During a fall alarm, double press to cancel.')}>
+                <div className="button-guide-title">Wearable button</div>
+                <dl>
+                  <dt>Press</dt><dd>Describe what&rsquo;s ahead</dd>
+                  <dt>Double press</dt><dd>Switch Tap mode / Live guide</dd>
+                  <dt>Hold 1 s, let go</dt><dd>Stop everything (quiet, Live guide off)</dd>
+                  <dt>Hold 3 s</dt><dd>Repeat the last thing said</dd>
+                  <dt>During a fall alarm</dt><dd>Double press to cancel</dd>
+                </dl>
+              </div>
 
               <label className="toggle" {...hover(`Hazard watch in Live guide. Warn me when something comes at me fast. ${hazardOn ? 'On' : 'Off'}`)}>
                 <input type="checkbox" checked={hazardOn} onChange={(e) => {

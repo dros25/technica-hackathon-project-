@@ -65,7 +65,18 @@ A USB webcam on the forearm, plugged into the laptop. With it connected, pressin
 The same webcam also powers **Settings > Camera > Wearable**: the app's camera view shows it (`/camera/stream`) and Tap / Live guide describe from it (`/narrate` with `source=wearable`; the server skips the AI when the view hasn't changed). Hazard watch needs the phone's own video, so it pauses in that mode. One module (`camera.py`) serves both, so they never fight over the camera.
 
 ### Wearable (`firmware/guardian/guardian.ino`, laptop side `backend/hardware.py`)
-Arduino UNO R4 WiFi + Grove shield: button D2, buzzer D3, light sensor A0, accelerometer and LCD on I2C. Fall = free-fall or impact, then stillness, then a **30 s countdown** (double-click the button or tap "I'm okay" to cancel), then the alarm. Pressing the button (outside a fall) = "describe what's ahead" on the phone.
+Arduino UNO R4 WiFi + Grove shield: button D2, buzzer D3, light sensor A0, accelerometer and LCD on I2C. Fall = free-fall or impact, then stillness, then a **30 s countdown** (double-click the button or tap "I'm okay" to cancel), then the alarm.
+
+**Button** (one button; patterns detected on the board, also listed in the app's Settings):
+| Press | Action |
+|---|---|
+| Press | Describe what's ahead (wrist camera if connected, else the phone) |
+| Double press | Switch Tap mode / Live guide (spoken) |
+| Hold 1–3 s, then let go | Stop everything: silence, drop answers still on the way, Live guide + hazard watch off ("Stopped.") |
+| Hold 3 s | Repeat the last thing said (fires at 3 s, while still held) |
+| During a fall countdown or alarm | Double press cancels; single presses and holds are ignored |
+
+A single press acts ~0.4 s after release (it waits to rule out a double press). "Stop" happens on release, so holding on to 3 s gives repeat instead. Stop never cancels a fall alarm. Board messages: `BTN`, `BTN2`, `STOP`, `BTNHOLD` (sent through the same `out` link, so they work over USB and Wi-Fi). Timing constants: `MULTI_CLICK_MS`, `STOP_HOLD_MS`, `REPEAT_HOLD_MS` in the firmware.
 
 It talks to the laptop over **USB, Wi-Fi, or both** (same messages either way; USB wins when both are up, so nothing is handled twice). The app's status shows which: "Online, wearable on Wi-Fi / USB".
 
@@ -91,7 +102,7 @@ USB always works too: plug the cable in and the laptop uses it first. If the lin
 | `GET /events` | wearable and wrist events for the phone (button, fall, dark...) |
 | `/wrist/describe`, `/wrist/snapshot.jpg` | test the wrist camera |
 | `/lcd`, `/cancel`, `/alarm`, `/fall-detection` | wearable controls |
-| `/test/<fall\|button\|cancel\|dark>` | fake events for testing (real wearable if connected, else simulated) |
+| `/test/<fall\|button\|double\|stop\|hold\|cancel\|dark>` | fake events for testing (real wearable if connected, else simulated) |
 
 ---
 
@@ -110,13 +121,12 @@ USB always works too: plug the cable in and the laptop uses it first. If the lin
 **Built**
 - Phone app (SightSea): one-screen layout that never scrolls, big camera view with the spoken description below it, full-screen Settings, tap-to-hear / double-tap-to-use, natural voice for everything with a voice picker (phrases cached so repeats cost no credits), Live guide, hazard watch (object + looming), spoken warnings with follow-up names, fall countdown screen, wearable message editor
 - Backend: Gemini with model fallback, ElevenLabs voice (optional), OpenRouter backup, wrist camera, `/identify`
-- Wearable: fall detection with countdown, light sensor, LCD, buzzer, button; USB or Wi-Fi (phone hotspot, the laptop finds it, powered by the iPhone)
+- Wearable: fall detection with countdown, light sensor, LCD, buzzer, one button (press / double / hold 1 s to stop / hold 3 s to repeat); USB or Wi-Fi (phone hotspot, the laptop finds it, powered by the iPhone)
 - `start.bat` one-click setup and public link
 - Poster (design canvas in claude.ai)
 
 **Planned / ideas, not built yet**
 - Cane sleeve: elastic wrap with two buttons (round = ask / double = Live guide; ridged = repeat / hold = I'm okay) and a vibration motor for hazard buzzes
-- Second Grove button on D4 and press patterns in firmware
 - Fall countdown 10 s for demos (currently 30 s)
 - Always-on cloud hosting (Google Cloud Run), so the website works without the laptop
 - "What's connected" panel in the app
