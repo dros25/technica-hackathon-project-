@@ -13,7 +13,8 @@ Test:     python hardware.py          (prints events and which link is up, lets 
 Use from the Flask server:
     from hardware import Hardware
     hw = Hardware()                    # never fails: waits for USB and listens for Wi-Fi
-    hw.get_events()  -> [{"type": "button"}, {"type": "fall_pending", "seconds": 30},
+    hw.get_events()  -> [{"type": "button"}, {"type": "button_double"}, {"type": "button_hold"},
+                         {"type": "fall_pending", "seconds": 30},
                          {"type": "fall"} (alarm), {"type": "cancel"}, {"type": "dark"},
                          {"type": "connected", "link": "wifi"}, {"type": "disconnected"}, ...]
     hw.connected, hw.link ("usb" / "wifi" / None), hw.light (0-1023, low = dark) or None
@@ -253,7 +254,11 @@ class Hardware:
         if source == "wifi" and self.serial_ok:
             return  # USB is live and carries the same messages: don't handle twice
         if line == "BTN":
-            self._push({"type": "button"})
+            self._push({"type": "button"})          # press: describe what's ahead
+        elif line == "BTN2":
+            self._push({"type": "button_double"})   # double press: switch Tap / Live guide
+        elif line == "BTNHOLD":
+            self._push({"type": "button_hold"})     # hold: repeat the last thing said
         elif line.startswith("FALL_PENDING"):
             try:
                 seconds = int(line.split(":", 1)[1])

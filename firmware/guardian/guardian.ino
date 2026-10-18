@@ -19,7 +19,7 @@
   commands back on port 5006. With both USB and Wi-Fi up, the laptop uses USB and ignores the copies.
 
   Serial protocol (115200 baud, one message per line):
-    Arduino -> laptop:  BTN | FALL_PENDING:<sec> | FALL (alarm) | CANCEL | LIGHT:<0-1023> | FALLDET:ON/OFF | READY | ERR:<msg>
+    Arduino -> laptop:  BTN (press) | BTN2 (double press) | BTNHOLD (held ~1 s) | FALL_PENDING:<sec> | FALL (alarm) | CANCEL | LIGHT:<0-1023> | FALLDET:ON/OFF | READY | ERR:<msg>
     Laptop -> Arduino:  LCD:<line1>|<line2>   ALARM:ON/OFF   TESTFALL   CANCEL   FALLDET:ON/OFF   PING
                         DIAG (accel status + I2C scan)   STREAM (toggle MAG:<g> output)
 */
@@ -68,6 +68,14 @@ bool fallDetection = true;                    // toggled from the phone (FALLDET
 unsigned long pendingStart = 0;
 long lastShownSec = -1;
 unsigned long lastPressTime = 0;
+
+// Button patterns (outside a fall): press = describe, double = switch mode, hold = repeat
+const unsigned long MULTI_CLICK_MS = 400;     // a second press within this = double press
+const unsigned long HOLD_MS        = 900;     // held this long = hold
+unsigned long pressStart = 0;                 // when the current press began (0 = not pressed)
+bool holdSent = false;
+int clickCount = 0;
+unsigned long lastRelease = 0;
 unsigned long chirpUntil = 0;
 Mode mode = NORMAL;
 unsigned long impactTime = 0;
@@ -257,6 +265,8 @@ void showNormal() {
 void triggerFall() {
   mode = PENDING;
   pendingStart = millis();
+  clickCount = 0;
+  pressStart = 0;
   lastShownSec = -1;
   lastPressTime = 0;
   emit("FALL_PENDING:" + String(COUNTDOWN_MS / 1000));
@@ -357,19 +367,39 @@ void updateBuzzer(unsigned long now) {
 // ---------- Button ----------
 void updateButton(unsigned long now) {
   int reading = digitalRead(BUTTON_PIN);
-  if (reading != lastButton && now - lastButtonChange > 50) {
+  if (reading != lastButton && now - lastButtonChange > 50) {   // debounced change
     lastButtonChange = now;
     lastButton = reading;
+    bool falling = (mode == PENDING || mode == FALLEN);
     if (reading == HIGH) {  // pressed
-      if (mode == PENDING || mode == FALLEN) {
+      if (falling) {
         // During a fall only a double-click cancels, so a stray press can't
         if (lastPressTime != 0 && now - lastPressTime <= DOUBLE_CLICK_MS) cancelFall();
         else lastPressTime = now;
-      } else {
-        if (mode == IMPACT) { mode = NORMAL; stillStart = 0; }  // they're moving the button: fine
-        emit("BTN");
+        return;
       }
+      if (mode == IMPACT) { mode = NORMAL; stillStart = 0; }  // they're moving the button: fine
+      pressStart = now;
+      holdSent = false;
+    } else {                // released
+      if (!falling && pressStart != 0 && !holdSent) {
+        clickCount++;
+        lastRelease = now;
+        if (clickCount >= 2) { emit("BTN2"); clickCount = 0; }  // double press: act right away
+      }
+      pressStart = 0;
     }
+  }
+  // Held long enough: "hold" (fires while still held, so it feels immediate)
+  if (pressStart != 0 && !holdSent && lastButton == HIGH && now - pressStart >= HOLD_MS) {
+    holdSent = true;
+    clickCount = 0;
+    emit("BTNHOLD");
+  }
+  // One press and no second one in time: a single press
+  if (clickCount == 1 && pressStart == 0 && now - lastRelease > MULTI_CLICK_MS) {
+    clickCount = 0;
+    emit("BTN");
   }
 }
 

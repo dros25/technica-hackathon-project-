@@ -96,6 +96,9 @@ export default function App() {
   const cameraMsgRef = useRef('The camera is starting. Try again in a moment.');
   const speechRef = useRef({ id: 0, priority: null });
   const lastHoverRef = useRef({ text: '', at: 0 });
+  const lastSaidRef = useRef('');      // for "hold the button to repeat"
+  const modeRef = useRef('tap');
+  const chooseModeRef = useRef(null);
   const liveRef = useRef({ text: '', at: 0, sig: null });
 
   useEffect(() => { readAloudRef.current = readAloud; saveSetting('readAloud', readAloud); }, [readAloud]);
@@ -125,6 +128,7 @@ export default function App() {
     synth.cancel();
     const id = ++s.id;
     s.priority = priority;
+    if (priority !== 'low') lastSaidRef.current = text;
     const u = new SpeechSynthesisUtterance(text);
     u.rate = priority === 'urgent' ? 1.25 : 1.05;
     u.onend = () => { if (speechRef.current.id === id) speechRef.current.priority = null; };
@@ -457,6 +461,7 @@ export default function App() {
     return () => clearInterval(timer);
   }, [mode]);
 
+  useEffect(() => { modeRef.current = mode; }, [mode]);
   const chooseMode = (next) => {
     if (next === mode) return;
     setMode(next);
@@ -468,6 +473,7 @@ export default function App() {
     setCaption(msg);
     speak(msg);
   };
+  chooseModeRef.current = chooseMode; // lets the wearable button switch modes (double press)
 
   // ---------- Fall countdown ----------
   const startCountdown = useCallback((seconds) => {
@@ -536,7 +542,14 @@ export default function App() {
           sendFallDetection(fallDetectionRef.current);
         }
         (data.events || []).forEach((ev) => {
-          if (ev.type === 'button') {
+          if (ev.type === 'button_double') {
+            // Wearable: double press switches Tap mode <-> Live guide
+            if (chooseModeRef.current) chooseModeRef.current(modeRef.current === 'live' ? 'tap' : 'live');
+          } else if (ev.type === 'button_hold') {
+            // Wearable: hold repeats the last thing said
+            const last = lastSaidRef.current;
+            if (last) { setCaption(last); speak(last); } else speak('Nothing to repeat yet.');
+          } else if (ev.type === 'button') {
             describeRef.current('tap');
           } else if (ev.type === 'wrist_looking') {
             // Wearable button + wrist camera: the laptop is describing what the hand points at
@@ -703,6 +716,16 @@ export default function App() {
 
         <details className="settings">
           <summary {...hover('Settings')}>Settings</summary>
+
+          <div className="button-guide" {...hover('Wearable button. Press to describe what is ahead. Double press to switch between tap mode and live guide. Hold to repeat the last thing said. During a fall alarm, double press to cancel.')} tabIndex={0}>
+            <div className="button-guide-title">Wearable button</div>
+            <dl>
+              <dt>Press</dt><dd>Describe what&rsquo;s ahead</dd>
+              <dt>Double press</dt><dd>Switch Tap mode / Live guide</dd>
+              <dt>Hold</dt><dd>Repeat the last thing said</dd>
+              <dt>During a fall</dt><dd>Double press to cancel</dd>
+            </dl>
+          </div>
 
           <label className="toggle" {...hover(`Hazard watch in Live guide. Warn me when something comes at me fast. ${hazardOn ? 'On' : 'Off'}`)}>
             <input type="checkbox" checked={hazardOn} onChange={(e) => {

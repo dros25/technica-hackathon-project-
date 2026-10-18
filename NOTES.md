@@ -61,7 +61,17 @@ Tuning lives in the "Tunables" blocks at the top of both files (time-to-contact 
 A USB webcam on the forearm, plugged into the laptop. With it connected, pressing the wearable button describes what the wrist camera sees; the **chest phone speaks** the answer (one voice). Without it, the button describes from the chest camera. Pick the camera with `WRIST_CAMERA=` in `.env`; check the aim at `http://localhost:5000/wrist/snapshot.jpg`.
 
 ### Wearable (`firmware/guardian/guardian.ino`, laptop side `backend/hardware.py`)
-Arduino UNO R4 WiFi + Grove shield: button D2, buzzer D3, light sensor A0, accelerometer and LCD on I2C. Fall = free-fall or impact, then stillness, then a **30 s countdown** (double-click the button or tap "I'm okay" to cancel), then the alarm. Pressing the button (outside a fall) = "describe what's ahead" on the phone.
+Arduino UNO R4 WiFi + Grove shield: button D2, buzzer D3, light sensor A0, accelerometer and LCD on I2C. Fall = free-fall or impact, then stillness, then a **30 s countdown** (double-click the button or tap "I'm okay" to cancel), then the alarm.
+
+**Button patterns** (one button; detected on the board, also listed in the app's Settings):
+| Press | Action |
+|---|---|
+| Press | Take a photo and describe it (wrist camera if connected, else the chest phone) |
+| Double press | Switch Tap mode / Live guide (spoken) |
+| Hold ~1 s | Repeat the last thing said |
+| During a fall countdown or alarm | Double press cancels; single presses are ignored |
+
+A single press acts ~0.4 s after release (it waits to rule out a double press); double and hold act immediately. Timing constants: `MULTI_CLICK_MS`, `HOLD_MS` in the firmware.
 
 It talks to the laptop over **USB, Wi-Fi, or both** (same messages either way; USB wins when both are up, so nothing is handled twice). The app's status shows which: "Online, wearable on Wi-Fi / USB".
 
@@ -84,7 +94,7 @@ Tips: the Arduino IDE Serial Monitor shows `WIFI:` lines (connecting, IP, not fo
 | `GET /events` | wearable and wrist events for the phone (button, fall, dark...) |
 | `/wrist/describe`, `/wrist/snapshot.jpg` | test the wrist camera |
 | `/lcd`, `/cancel`, `/alarm`, `/fall-detection` | wearable controls |
-| `/test/<fall\|button\|cancel\|dark>` | fake events for testing (real wearable if connected, else simulated) |
+| `/test/<fall\|button\|double\|hold\|cancel\|dark>` | fake events for testing (real wearable if connected, else simulated) |
 
 ---
 
@@ -108,7 +118,7 @@ Tips: the Arduino IDE Serial Monitor shows `WIFI:` lines (connecting, IP, not fo
 
 **Planned / ideas, not built yet**
 - Cane sleeve: elastic wrap with two buttons (round = ask / double = Live guide; ridged = repeat / hold = I'm okay) and a vibration motor for hazard buzzes
-- Second Grove button on D4 and press patterns in firmware
+- Second Grove button on D4 (press patterns on one button are done)
 - Fall countdown 10 s for demos (currently 30 s)
 - Always-on cloud hosting (Google Cloud Run), so the website works without the laptop
 - "What's connected" panel in the app

@@ -300,6 +300,22 @@ body {
 }
 .display-fields input[type='text']:focus { border-color: var(--seaglass); }
 
+.button-guide {
+  border: 2px solid var(--current);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.button-guide-title { font-weight: 700; margin-bottom: 8px; }
+.button-guide dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  font-size: 1.1rem;
+}
+.button-guide dt { font-weight: 700; color: var(--seaglass); }
+.button-guide dd { margin: 0; }
+
 .sensitivity {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
