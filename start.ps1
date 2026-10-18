@@ -140,7 +140,31 @@ if (-not $SkipBuild -or -not (Test-Path $BuildDir)) {
     Ok "Build ready"
 }
 
-# ---------- 5. Free port 5000 / stop old copies ----------
+# ---------- 5. Wearable Wi-Fi: Windows must not block its messages ----------
+Step "Checking the network for the wearable (Wi-Fi)"
+$publicNets = Get-NetConnectionProfile -ErrorAction SilentlyContinue | Where-Object { $_.NetworkCategory -eq "Public" }
+foreach ($net in $publicNets) {
+    try {
+        Set-NetConnectionProfile -InterfaceIndex $net.InterfaceIndex -NetworkCategory Private -ErrorAction Stop
+        Ok "Set '$($net.Name)' to a Private network so the wearable can reach this laptop"
+    } catch {
+        Warn "'$($net.Name)' is a Public network: Windows may block the wearable's Wi-Fi messages."
+        Warn "Fix: Settings > Network & internet > Wi-Fi > $($net.Name) > Network profile type: Private"
+    }
+}
+$rule = netsh advfirewall firewall show rule name="Guardian wearable" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    netsh advfirewall firewall add rule name="Guardian wearable" dir=in action=allow protocol=UDP localport=5005 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) { Ok "Firewall rule added for the wearable (UDP 5005)" }
+    else {
+        Warn "Couldn't add a firewall rule (needs admin). Only matters for the Wi-Fi wearable. If it never connects,"
+        Warn "run PowerShell as administrator once and paste:"
+        Write-Host '    netsh advfirewall firewall add rule name="Guardian wearable" dir=in action=allow protocol=UDP localport=5005'
+    }
+} else { Ok "Firewall rule for the wearable is in place" }
+if (-not $publicNets) { Ok "Network type is fine" }
+
+# ---------- 6. Free port 5000 / stop old copies ----------
 Step "Starting Guardian"
 $old = Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue
 if ($old) {
@@ -160,7 +184,7 @@ for ($i = 0; $i -lt 40; $i++) {
 if (-not $up) { Fail "The backend didn't start. Check its window for the error." }
 Ok "Backend running on http://localhost:5000"
 
-# ---------- 6. Public link ----------
+# ---------- 7. Public link ----------
 $ngrokArgs = @("http", "5000")
 if ($Domain) { $ngrokArgs += "--url=$Domain" }
 Start-Process -FilePath "ngrok" -ArgumentList $ngrokArgs

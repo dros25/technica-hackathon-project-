@@ -67,11 +67,11 @@ It talks to the laptop over **USB, Wi-Fi, or both** (same messages either way; U
 
 #### Wireless setup (no laptop on your back)
 The laptop sits on a table; the wearable is powered by the iPhone and talks over the iPhone's hotspot.
-1. **iPhone:** Settings > Personal Hotspot > turn on **Allow Others to Join** and **Maximize Compatibility** (the board only uses 2.4 GHz Wi-Fi). Keep that screen open while things connect the first time.
-2. **Laptop:** join the iPhone's hotspot. Start the backend (`start.bat`). When Windows asks, **allow Python on both private and public networks** (needed to hear the wearable).
-3. **Firmware:** in `firmware/guardian/`, copy `secrets.example.h` to `secrets.h`, fill in the hotspot name and password, and upload with the Arduino IDE (USB, once). `secrets.h` is gitignored.
+1. **iPhone:** Settings > General > About > **Name**: rename it to something plain like `IanPhone` (iPhone names use a curly apostrophe, "Ian’s iPhone", that won't match one typed into the firmware). Then Settings > Personal Hotspot > turn on **Allow Others to Join** and **Maximize Compatibility** (the board only uses 2.4 GHz Wi-Fi). Keep that screen open while things connect the first time.
+2. **Laptop:** join the iPhone's hotspot, then run `start.bat`. It sets the hotspot to a **Private** network and adds a firewall rule for the wearable if it can; if it says it can't (needs admin), follow what it prints. When Windows asks about Python, **allow it on private and public networks.**
+3. **Firmware:** in `firmware/guardian/`, copy `secrets.example.h` to `secrets.h`, fill in the hotspot name (exactly as renamed) and password, and upload with the Arduino IDE (USB, once). `secrets.h` is gitignored.
 4. **Power:** unplug from the laptop and plug the Arduino into the **iPhone 15's USB-C port** (USB-C cable). The LCD shows "Wi-Fi..." then the normal message; within a few seconds the phone says "Wearable connected over Wi-Fi."
-5. **If it never connects:** check the backend window. It prints "this laptop's addresses: ...". Put that address in `secrets.h` as `#define LAPTOP_IP 172,20,10,2` (commas, not dots) and upload again. Some hotspots block the broadcast the board uses to find the laptop.
+5. **If it never connects:** check the backend window. After 30 s without the wearable it prints a checklist, including "this laptop's addresses". Put that address in `secrets.h` as `#define LAPTOP_IP 172,20,10,2` (commas, not dots) and upload again. Some hotspots block the broadcast the board uses to find the laptop.
 
 Tips: the Arduino IDE Serial Monitor shows `WIFI:` lines (connecting, IP, not found). Charge the iPhone before demoing: camera + AI + hotspot + powering the board drains it faster. While the hotspot is missing, the board retries every 15–60 s, and each try pauses the board for a few seconds; remove `secrets.h` for USB-only use.
 

@@ -122,7 +122,15 @@ class Hardware:
 
     def _watch_link(self):
         """Announce connect/disconnect, and restore settings the board forgets when it restarts."""
+        started = time.time()
+        hinted = False
         while True:
+            if not hinted and not self.connected and time.time() - started > 30:
+                hinted = True
+                print("[hardware] no wearable yet. Wi-Fi checklist: laptop on the phone's hotspot; "
+                      "hotspot 'Maximize Compatibility' on; Windows network set to Private (or Python "
+                      "allowed on public networks); secrets.h name/password exact; else set LAPTOP_IP "
+                      f"in secrets.h to one of: {', '.join(local_ips()) or 'unknown'}")
             now = self.connected
             if now and not self._was_connected:
                 print(f"[hardware] wearable connected over {self.link.upper()}")
