@@ -287,6 +287,44 @@ export default function App() {
     const text = a.direction === 'ahead' ? `${a.name} ahead!` : `${a.name}, ${a.direction}!`;
     setCaption(text);
     speak(text, 'urgent');
+    if (a.needsName) identifyHazard(a, text);
+  };
+
+  // Warn first, name it a moment later: Gemini looks at just the crop ("It's a shopping cart.")
+  const identifyHazard = async (a, warning) => {
+    const at = Date.now();
+    const video = videoRef.current;
+    if (!video || !video.videoWidth || !a.region) return;
+    const { x1, y1, x2, y2 } = a.region;
+    const sx = x1 * video.videoWidth, sy = y1 * video.videoHeight;
+    const sw = Math.max(16, (x2 - x1) * video.videoWidth), sh = Math.max(16, (y2 - y1) * video.videoHeight);
+    const scale = Math.min(1, 384 / Math.max(sw, sh));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(sw * scale);
+    canvas.height = Math.round(sh * scale);
+    canvas.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    try {
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.75));
+      const form = new FormData();
+      form.append('image', blob, 'crop.jpg');
+      const res = await api('/identify', { method: 'POST', body: form });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.name || Date.now() - at > 6000 || fallRef.current) return; // too late to matter
+      const article = /^[aeiou]/i.test(data.name) ? 'an' : 'a';
+      setCaption(`${warning} It's ${article} ${data.name}.`);
+      speakWhenFree(`It's ${article} ${data.name}.`);
+    } catch { /* naming is a bonus; the warning already went out */ }
+  };
+
+  // Say this right after the current warning finishes (never cut the warning off)
+  const speakWhenFree = (text) => {
+    const start = Date.now();
+    const tick = () => {
+      const synth = window.speechSynthesis;
+      if (synth && synth.speaking && Date.now() - start < 3000) { setTimeout(tick, 80); return; }
+      speak(text, 'urgent');
+    };
+    tick();
   };
 
   hazardHandlersRef.current.onStatus = (state, detail) => {
@@ -323,8 +361,22 @@ export default function App() {
     const scale = Math.max(cw / vw, ch / vh);
     const dx = (cw - vw * scale) / 2, dy = (ch - vh * scale) / 2;
     ctx.font = '700 14px Atkinson Hyperlegible, sans-serif';
+    // Model-free looming check: ring where something is expanding fast
+    if (frame.loom) {
+      frame.loom.forEach((z) => {
+        if (!z.threat) return;
+        const lx = z.cx * vw * scale + dx, ly = z.cy * vh * scale + dy;
+        ctx.strokeStyle = '#ffd23f';
+        ctx.lineWidth = 5;
+        ctx.setLineDash([10, 8]);
+        ctx.beginPath();
+        ctx.arc(lx, ly, Math.min(cw, ch) * 0.16, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      });
+    }
     for (const tr of tracks) {
-      if (!tr.box) continue;
+      if (!tr.box || (tr.seen || 0) < 2) continue; // skip one-frame blips
       const x = tr.box.x1 * vw * scale + dx, y = tr.box.y1 * vh * scale + dy;
       const w = (tr.box.x2 - tr.box.x1) * vw * scale, h = (tr.box.y2 - tr.box.y1) * vh * scale;
       const color = tr.threat ? '#ffd23f' : '#4ff0e2';

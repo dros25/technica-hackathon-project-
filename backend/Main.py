@@ -44,6 +44,11 @@ WRIST_PROMPT = (
     "If there is readable text (signs, labels, screens, doors), read it out. "
     "Mention anything that matters for safety. No preamble."
 )
+NAME_PROMPT = (
+    "Name the main object in this picture in 1 to 4 words, as specifically as you can "
+    "(for example: shopping cart, tiger, water bottle, electric scooter). "
+    "Reply with only the name, no punctuation. If you can't tell, reply: unknown"
+)
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 ELEVEN_VOICE_ID = os.getenv("ELEVEN_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")
 ELEVEN_MODEL = os.getenv("ELEVEN_MODEL", "eleven_flash_v2_5")  # fast + uses fewer credits
@@ -377,6 +382,28 @@ def narrate():
     # voice=device -> the phone speaks it itself (instant, saves ElevenLabs credits; used by live mode)
     want_audio = request.form.get("voice", "eleven") == "eleven"
     return jsonify({"text": text, "audio": speak(text) if want_audio else None, "source": source})
+
+
+@app.route("/identify", methods=["POST"])
+def identify():
+    """Fast follow-up name for a hazard warning: a small crop in, a few words out."""
+    image = request.files.get("image")
+    image_bytes = image.read() if image else b""
+    if not image_bytes:
+        return jsonify({"error": "no image"}), 400
+    try:
+        start = time.time()
+        if MOCK_VISION:
+            name, source = "test object", "mock"
+        else:
+            name, source = describe_image(image_bytes, image.mimetype or "image/jpeg", NAME_PROMPT)
+        name = re.sub(r"[^\w\s'-]", "", name).strip().lower()[:40]
+        print(f"[identify] {source} in {time.time() - start:.1f}s: {name}")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+    if not name or name == "unknown":
+        return jsonify({"name": None, "source": source})
+    return jsonify({"name": name, "source": source})
 
 
 @app.route("/speak", methods=["POST"])
