@@ -512,11 +512,11 @@ def alarm():
 @app.route("/test/<event_type>", methods=["POST", "GET"])
 def test_event(event_type):
     """Fake events for testing the frontend: /test/fall, /test/button, /test/double, /test/hold,
-    /test/help, /test/cancel, /test/dark.
+    /test/help, /test/stop, /test/cancel, /test/dark.
     With the wearable connected, fall/cancel go to the real device; otherwise they're simulated."""
     global _sim_fall_timer
-    if event_type not in ("fall", "button", "double", "hold", "help", "cancel", "dark"):
-        return jsonify({"error": "use fall, button, double, hold, help, cancel or dark"}), 400
+    if event_type not in ("fall", "button", "double", "hold", "help", "stop", "cancel", "dark"):
+        return jsonify({"error": "use fall, button, double, hold, help, stop, cancel or dark"}), 400
     mock = getattr(hw, "is_mock", False)
     live = getattr(hw, "connected", False) and not mock
     if event_type == "fall":

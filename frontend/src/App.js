@@ -99,6 +99,8 @@ export default function App() {
   const lastSaidRef = useRef('');      // for "hold the button to repeat"
   const modeRef = useRef('tap');
   const chooseModeRef = useRef(null);
+  const stoppedAtRef = useRef(0);      // "stop everything": answers that started before this are dropped
+  const stopRef = useRef(null);
   const liveRef = useRef({ text: '', at: 0, sig: null });
 
   useEffect(() => { readAloudRef.current = readAloud; saveSetting('readAloud', readAloud); }, [readAloud]);
@@ -229,6 +231,7 @@ export default function App() {
   // ---------- Describe the scene ----------
   const describe = useCallback(async (kind = 'tap') => {
     if (busyRef.current) return;
+    const startedAt = Date.now();
     const canvas = grabFrame(videoRef.current, 640);
     if (!canvas) {
       if (kind === 'tap') { setCaption(cameraMsgRef.current); speak(cameraMsgRef.current); }
@@ -251,6 +254,7 @@ export default function App() {
       const res = await api('/narrate', { method: 'POST', body: form });
       const data = await res.json().catch(() => ({ error: `The server sent back something unexpected (${res.status}).` }));
       if (!res.ok || data.error) throw new Error(data.error || `Server error ${res.status}`);
+      if (stoppedAtRef.current > startedAt) return; // "stop everything" was pressed meanwhile
 
       if (kind === 'live') {
         liveRef.current.at = Date.now();
@@ -284,6 +288,7 @@ export default function App() {
 
   hazardHandlersRef.current.onAlert = (a) => {
     if (fallRef.current) return; // the fall alarm owns the screen and voice
+    if (Date.now() - stoppedAtRef.current < 1500) return; // just stopped: Live guide is switching off
     lastHazardRef.current = Date.now();
     const big = a.rank >= 3;
     beep(big ? 2 : 1);
@@ -314,6 +319,7 @@ export default function App() {
       const res = await api('/identify', { method: 'POST', body: form });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.name || Date.now() - at > 6000 || fallRef.current) return; // too late to matter
+      if (stoppedAtRef.current > at) return; // "stop everything" was pressed meanwhile
       const article = /^[aeiou]/i.test(data.name) ? 'an' : 'a';
       setCaption(`${warning} It's ${article} ${data.name}.`);
       speakWhenFree(`It's ${article} ${data.name}.`);
@@ -475,6 +481,18 @@ export default function App() {
   };
   chooseModeRef.current = chooseMode; // lets the wearable button switch modes (double press)
 
+  // Stop everything: silence, drop answers still on their way, Live guide + hazard watch off.
+  // Deliberately does NOT cancel a fall/help alarm (that needs a double press or "I'm okay").
+  const stopEverything = () => {
+    stoppedAtRef.current = Date.now();
+    wristPendingRef.current = 0;
+    stopSpeaking();
+    if (modeRef.current === 'live') setMode('tap');
+    setCaption('Stopped. Press button 2 to turn Live guide back on.');
+    speak('Stopped.');
+  };
+  stopRef.current = stopEverything;
+
   // ---------- Fall countdown ----------
   const startCountdown = useCallback((seconds) => {
     fallDeadlineRef.current = Date.now() + seconds * 1000;
@@ -557,6 +575,8 @@ export default function App() {
             // Wearable: hold repeats the last thing said
             const last = lastSaidRef.current;
             if (last) { setCaption(last); speak(last); } else speak('Nothing to repeat yet.');
+          } else if (ev.type === 'stop') {
+            if (stopRef.current) stopRef.current();
           } else if (ev.type === 'help') {
             helpAlarm();
           } else if (ev.type === 'button') {
@@ -567,7 +587,9 @@ export default function App() {
             if (navigator.vibrate) navigator.vibrate(60);
             setCaption('Looking where you are pointing…');
           } else if (ev.type === 'wrist_description') {
+            const asked = wristPendingRef.current;
             wristPendingRef.current = 0;
+            if (asked && stoppedAtRef.current > asked) return; // stopped while it was coming
             setCaption(ev.text);
             speak(ev.text); // 'high': never cuts off a hazard warning
           } else if (ev.type === 'wrist_error') {
@@ -699,6 +721,15 @@ export default function App() {
 
         <p className="caption" role="status" aria-live="polite">{caption}</p>
 
+        <button
+          type="button"
+          className="stop-all"
+          onClick={stopEverything}
+          {...hover('Stop everything. Silence, and turn off live guide')}
+        >
+          Stop everything
+        </button>
+
         <div className="modes" role="radiogroup" aria-label="How Guardian describes the scene">
           <button
             type="button"
@@ -727,13 +758,14 @@ export default function App() {
         <details className="settings">
           <summary {...hover('Settings')}>Settings</summary>
 
-          <div className="button-guide" {...hover('Wearable buttons. Button 1: press to describe what is ahead, hold to repeat. Button 2: press to switch between tap mode and live guide, hold 3 seconds to call for help. During an alarm, double press either button to cancel.')} tabIndex={0}>
+          <div className="button-guide" {...hover('Wearable buttons. Button 1: press to describe what is ahead, hold to repeat. Button 2: press to switch between tap mode and live guide, hold 3 seconds to call for help. Both buttons together: stop everything. During an alarm, double press either button to cancel.')} tabIndex={0}>
             <div className="button-guide-title">Wearable buttons</div>
             <dl>
               <dt>Button 1 press</dt><dd>Describe what&rsquo;s ahead</dd>
               <dt>Button 1 hold</dt><dd>Repeat the last thing said</dd>
               <dt>Button 2 press</dt><dd>Switch Tap mode / Live guide</dd>
               <dt>Button 2 hold 3 s</dt><dd>I need help (alarm)</dd>
+              <dt>Both together</dt><dd>Stop everything (quiet, Live guide off)</dd>
               <dt>During an alarm</dt><dd>Double press either button to cancel</dd>
             </dl>
             <p className="hint">One button only: press = describe, double press = switch mode, hold = repeat, hold 3 s = help.</p>

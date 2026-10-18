@@ -69,7 +69,10 @@ Arduino UNO R4 WiFi + Grove shield: button 1 on D2, button 2 on D7 (optional), b
 | Press | Describe what's ahead, instantly (wrist camera if connected, else chest phone) | Switch Tap mode / Live guide |
 | Hold ~1 s | Repeat the last thing said | (keep holding) |
 | Hold 3 s | | **I need help**: alarm + "Please help me" on the LCD; chirps each second while counting |
-| During a fall countdown or alarm | Double press either button cancels | single presses are ignored |
+| **Both together** | **Stop everything**: silence, drop answers still on the way, Live guide + hazard watch off ("Stopped.") | |
+| During a fall countdown or alarm | Double press either button cancels (a simultaneous squeeze of both counts as one press, so it can't cancel by accident) | single presses are ignored |
+
+"Stop everything" never cancels a fall/help alarm. The phone also has a **Stop everything** button.
 
 **One button only:** set `#define HAS_BUTTON2 0` at the top of the firmware (an empty pin reads random noise). Then: press = describe (acts ~0.4 s after release, to rule out a double), double press = switch mode, hold 1 s = repeat (on release), hold 3 s = help. Timing constants: `MULTI_CLICK_MS`, `HOLD_MS`, `HELP_HOLD_MS`.
 
@@ -94,7 +97,7 @@ Tips: the Arduino IDE Serial Monitor shows `WIFI:` lines (connecting, IP, not fo
 | `GET /events` | wearable and wrist events for the phone (button, fall, dark...) |
 | `/wrist/describe`, `/wrist/snapshot.jpg` | test the wrist camera |
 | `/lcd`, `/cancel`, `/alarm`, `/fall-detection` | wearable controls |
-| `/test/<fall\|button\|double\|hold\|help\|cancel\|dark>` | fake events for testing (real wearable if connected, else simulated) |
+| `/test/<fall\|button\|double\|hold\|help\|stop\|cancel\|dark>` | fake events for testing (real wearable if connected, else simulated) |
 
 ---
 
