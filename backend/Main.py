@@ -6,7 +6,8 @@ Run:   cd backend && python Main.py
        ELEVENLABS_API_KEY=...    (optional - without it, the phone uses its built-in voice)
        OPENROUTER_API_KEY=...    (optional fallback if Gemini fails)
        MOCK_HARDWARE=1           (optional - force mock mode even with the Arduino plugged in)
-       ARDUINO_PORT=COM3         (optional - only if auto-detect picks the wrong port)
+       ARDUINO_PORT=COM3         (optional - only if auto-detect picks the wrong USB port)
+       ARDUINO_HOST=172.20.10.4  (optional - Arduino WiFi address shown on its LCD; skips the search)
        MOCK_VISION=1             (optional - fake descriptions, uses no API quota)
        GEMINI_MODELS=a,b         (optional - exact model fallback order)
        OPENROUTER_MODEL=...      (optional - backup model on OpenRouter)
@@ -140,7 +141,7 @@ def load_hardware():
         return MockHardware()
     try:
         from hardware import Hardware  # backend/hardware.py
-        hw_real = Hardware(port=os.getenv("ARDUINO_PORT") or None)
+        hw_real = Hardware()  # USB if plugged in, otherwise finds it on WiFi
         hw_real.is_mock = False
         return hw_real
     except Exception as e:  # ImportError, no Arduino found, port busy...
@@ -362,7 +363,7 @@ app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10 MB images max
 def health():
     return jsonify({
         "status": "SightSea backend online",
-        "hardware": "mock" if getattr(hw, "is_mock", False) else "arduino",
+        "hardware": "mock" if getattr(hw, "is_mock", False) else f"arduino ({getattr(hw, 'transport', None) or 'reconnecting'})",
         "gemini": bool(gemini_client),
         "elevenlabs": bool(eleven_client),
         "frontend_build": bool(FRONTEND_BUILD),

@@ -16,95 +16,247 @@ Use from the Flask server:
     hw.alarm(True)
     hw.test_fall()
 
+Connection: USB if the Arduino is plugged in, otherwise WiFi. Over WiFi the Arduino joins
+your phone hotspot (see firmware/guardian/arduino_secrets.h) and this finds it automatically;
+the laptop must be on the same hotspot. Set ARDUINO_HOST=<ip shown on the LCD> to skip the search.
+
 IMPORTANT: run Flask with use_reloader=False (debug reloader opens the port twice),
-and close the Arduino IDE Serial Monitor - only one program can hold the port.
+and close the Arduino IDE Serial Monitor - only one program can hold the USB port.
 """
 
+import os
 import queue
+import socket
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import serial
 from serial.tools import list_ports
 
 BAUD = 115200
+NET_PORT = 5005          # match NET_PORT in guardian.ino
 DARK_LEVEL = 150         # match DARK_LEVEL in guardian.ino
 DARK_ALERT_COOLDOWN_S = 30
+SILENCE_S = 6            # the Arduino reports light every second; this long silent = lost
+
+
+# ---------- links: the same text protocol over USB or WiFi ----------
+class SerialLink:
+    kind = "usb"
+
+    def __init__(self, port, baud=BAUD):
+        self.ser = serial.Serial(port, baud, timeout=1)
+        self.name = port
+        time.sleep(2)  # the Arduino resets when the port opens
+
+    def readline(self):
+        return self.ser.readline()  # b"" on timeout
+
+    def write(self, data):
+        self.ser.write(data)
+
+    def close(self):
+        try:
+            self.ser.close()
+        except Exception:
+            pass
+
+
+class NetLink:
+    kind = "wifi"
+
+    def __init__(self, sock, host):
+        self.sock = sock
+        self.sock.settimeout(1)
+        self.name = f"WiFi {host}"
+        self.buf = b""
+
+    def readline(self):
+        while b"\n" not in self.buf:
+            try:
+                chunk = self.sock.recv(512)
+            except socket.timeout:
+                return b""
+            if not chunk:
+                raise OSError("WiFi connection closed")
+            self.buf += chunk
+        line, self.buf = self.buf.split(b"\n", 1)
+        return line + b"\n"
+
+    def write(self, data):
+        self.sock.sendall(data)
+
+    def close(self):
+        try:
+            self.sock.close()
+        except Exception:
+            pass
+
+
+def _find_serial_port():
+    ports = list(list_ports.comports())
+    hints = ("arduino", "ch340", "cp210", "usb serial", "wch", "seeed")
+    for p in ports:
+        text = f"{p.device} {p.description} {p.manufacturer or ''}".lower()
+        if any(h in text for h in hints) or "usbmodem" in text \
+                or "ttyacm" in text or "ttyusb" in text:
+            return p.device
+    raise RuntimeError("no USB Arduino (ports seen: " + (", ".join(p.device for p in ports) or "none") + ")")
+
+
+def _probe(host, timeout=0.6):
+    """Connect to host:NET_PORT and check it's our Arduino (PING -> READY). Returns a socket or None."""
+    try:
+        sock = socket.create_connection((host, NET_PORT), timeout=timeout)
+    except OSError:
+        return None
+    try:
+        sock.settimeout(3)
+        sock.sendall(b"PING\n")
+        data, deadline = b"", time.time() + 3
+        while time.time() < deadline:
+            chunk = sock.recv(512)
+            if not chunk:
+                break
+            data += chunk
+            if b"READY" in data:
+                return sock
+    except OSError:
+        pass
+    sock.close()
+    return None
+
+
+def _local_subnets():
+    """The laptop's networks, e.g. ['172.20.10'] on an iPhone hotspot."""
+    ips = set()
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("10.255.255.255", 1))  # picks the main interface; sends nothing
+        ips.add(s.getsockname()[0])
+        s.close()
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ips.add(info[4][0])
+    except OSError:
+        pass
+    return sorted({ip.rsplit(".", 1)[0] for ip in ips
+                   if not ip.startswith(("127.", "169.254."))})
+
+
+def _find_wifi_arduino():
+    """Ask every address on the laptop's network(s) whether it's the SightSea Arduino (~2-3 s)."""
+    hosts = [f"{net}.{i}" for net in _local_subnets() for i in range(1, 255)]
+    found = None
+    with ThreadPoolExecutor(max_workers=64) as ex:
+        for host, sock in zip(hosts, ex.map(_probe, hosts)):
+            if sock and found is None:
+                found = (sock, host)
+            elif sock:
+                sock.close()
+    if not found:
+        raise RuntimeError("no WiFi Arduino on " + (", ".join(n + ".x" for n in _local_subnets()) or "any network"))
+    return found
 
 
 class Hardware:
-    def __init__(self, port=None, baud=BAUD):
-        self._fixed_port = port      # if given, always use this port
-        self.baud = baud
-        self.port = port or self._find_port()
-        self.ser = serial.Serial(self.port, baud, timeout=1)
-        time.sleep(2)  # Arduino resets when the port opens
+    """Talks to the SightSea Arduino over USB if it's plugged in, otherwise over WiFi.
+
+    port: force a USB port (e.g. "COM5").  host: force the Arduino's WiFi address.
+    Both can also come from .env as ARDUINO_PORT / ARDUINO_HOST.
+    """
+
+    def __init__(self, port=None, host=None):
+        self._fixed_port = port or os.getenv("ARDUINO_PORT") or None
+        self._fixed_host = host or os.getenv("ARDUINO_HOST") or None
         self.light = None
-        self.connected = True
         self._lcd_lines = None       # re-sent after a reconnect
         self.fall_detection = True   # Arduino default; re-sent after a reconnect
         self._events = queue.Queue()
         self._write_lock = threading.Lock()
         self._last_dark_alert = 0.0
         self._was_dark = False
+        self.link = self._open_any()  # raises if neither USB nor WiFi finds it
+        self.connected = True
+        self._last_line = time.time()
         threading.Thread(target=self._read_loop, daemon=True).start()
-        print(f"[hardware] connected on {self.port}")
+        print(f"[hardware] connected over {self.link.kind.upper()} ({self.link.name})")
 
-    @staticmethod
-    def _find_port():
-        ports = list(list_ports.comports())
-        hints = ("arduino", "ch340", "cp210", "usb serial", "wch", "seeed")
-        for p in ports:
-            text = f"{p.device} {p.description} {p.manufacturer or ''}".lower()
-            if any(h in text for h in hints) or "usbmodem" in text \
-                    or "ttyacm" in text or "ttyusb" in text:
-                return p.device
-        raise RuntimeError(
-            "No Arduino found. Ports seen: "
-            + (", ".join(p.device for p in ports) or "none")
-            + ". Pass the port manually: Hardware('COM3') or Hardware('/dev/cu.usbmodem1101')"
-        )
+    @property
+    def transport(self):
+        return self.link.kind if self.connected else None
+
+    @property
+    def port(self):
+        return self.link.name
+
+    def _open_any(self):
+        errors = []
+        if not self._fixed_host:                 # USB first: it's the fallback that always works
+            try:
+                return SerialLink(self._fixed_port or _find_serial_port())
+            except Exception as e:
+                errors.append(f"USB: {e}")
+        if not self._fixed_port:
+            try:
+                if self._fixed_host:
+                    sock = _probe(self._fixed_host, timeout=2)
+                    if not sock:
+                        raise RuntimeError(f"no answer from {self._fixed_host}:{NET_PORT}")
+                    return NetLink(sock, self._fixed_host)
+                sock, host = _find_wifi_arduino()
+                return NetLink(sock, host)
+            except Exception as e:
+                errors.append(f"WiFi: {e}")
+        raise RuntimeError("No Arduino found. " + "; ".join(errors))
 
     # ---------- reading ----------
     def _read_loop(self):
         while True:
             try:
-                raw = self.ser.readline()
+                raw = self.link.readline()
+                if not raw:
+                    if time.time() - self._last_line > SILENCE_S:
+                        raise OSError(f"no data for {SILENCE_S} s")
+                    continue
             except (serial.SerialException, OSError) as e:
-                print(f"[hardware] lost connection: {e}")
+                print(f"[hardware] lost connection ({self.link.name}): {e}")
                 self._reconnect()
                 continue
-            if not raw:
-                continue
+            self._last_line = time.time()
             line = raw.decode(errors="ignore").strip()
-            self._handle_line(line)
+            if line:
+                self._handle_line(line)
 
     def _reconnect(self):
-        """Keep retrying until the Arduino is back (unplugged, reset, IDE grabbed the port...)."""
+        """Keep retrying USB and WiFi until the Arduino is back."""
         self.connected = False
         self._push({"type": "disconnected"})
-        try:
-            self.ser.close()
-        except Exception:
-            pass
+        self.link.close()
+        last_note = 0.0
         while True:
             time.sleep(2)
             try:
-                port = self._fixed_port or self._find_port()
-                with self._write_lock:
-                    self.ser = serial.Serial(port, self.baud, timeout=1)
-                self.port = port
-                time.sleep(2)  # board resets on open
-                self.connected = True
-                print(f"[hardware] reconnected on {port}")
-                self._push({"type": "reconnected"})
-                if self._lcd_lines:
-                    self.set_lcd(*self._lcd_lines)  # restore the user's message
-                if not self.fall_detection:
-                    self.set_fall_detection(False)  # board resets to ON
-                return
+                link = self._open_any()
             except Exception as e:
-                print(f"[hardware] waiting for Arduino... ({e})")
+                if time.time() - last_note > 15:
+                    print(f"[hardware] waiting for Arduino... ({e})")
+                    last_note = time.time()
+                continue
+            with self._write_lock:
+                self.link = link
+            self._last_line = time.time()
+            self.connected = True
+            print(f"[hardware] reconnected over {link.kind.upper()} ({link.name})")
+            self._push({"type": "reconnected"})
+            if self._lcd_lines:
+                self.set_lcd(*self._lcd_lines)  # restore the user's message
+            if not self.fall_detection:
+                self.set_fall_detection(False)  # board resets to ON
+            return
 
     def _handle_line(self, line):
         if line == "BTN":
@@ -134,7 +286,10 @@ class Hardware:
                 self._push({"type": "dark", "value": self.light})
             self._was_dark = is_dark
         else:
-            print(f"[arduino] {line}")  # READY, ERR:..., I2C:... etc.
+            if line.startswith("WIFI:"):
+                print(f"[hardware] Arduino is on WiFi at {line[5:]}")
+            else:
+                print(f"[arduino] {line}")  # READY, ERR:..., I2C:... etc.
 
     def _push(self, event):
         event["time"] = time.time()
@@ -156,7 +311,7 @@ class Hardware:
             return False
         try:
             with self._write_lock:
-                self.ser.write((cmd.strip() + "\n").encode())
+                self.link.write((cmd.strip() + "\n").encode())
             return True
         except (serial.SerialException, OSError) as e:
             print(f"[hardware] write failed: {e}")

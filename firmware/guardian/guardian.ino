@@ -13,12 +13,54 @@
 
   Serial protocol (115200 baud, one message per line):
     Arduino -> laptop:  BTN | FALL_PENDING:<sec> | FALL (alarm) | CANCEL | LIGHT:<0-1023> | FALLDET:ON/OFF | READY | ERR:<msg>
+    (Same protocol over USB serial and over WiFi TCP port 5005.)  WIFI:<ip> is sent once on connect.
     Laptop -> Arduino:  LCD:<line1>|<line2>   ALARM:ON/OFF   TESTFALL   CANCEL   FALLDET:ON/OFF   PING
                         DIAG (accel status + I2C scan)   STREAM (toggle MAG:<g> output)
 */
 
 #include <Wire.h>
 #include "rgb_lcd.h"
+
+// ---------- WiFi (optional) ----------
+// Put your hotspot name/password in arduino_secrets.h (next to this file, NOT in git):
+//   #define WIFI_SSID "MyPhone"
+//   #define WIFI_PASS "password123"
+// Without that file the sketch still works over USB only.
+#if __has_include("arduino_secrets.h")
+  #include "arduino_secrets.h"
+  #include <WiFiS3.h>
+  #define USE_WIFI 1
+#else
+  #define USE_WIFI 0
+#endif
+
+#if USE_WIFI
+const uint16_t NET_PORT = 5005;   // the laptop connects here
+WiFiServer netServer(NET_PORT);
+WiFiClient netClient;
+#endif
+
+// Everything the Arduino reports goes to USB serial AND (if connected) the WiFi client.
+// Lines are buffered so WiFi sends one packet per message, not one per character.
+class Link : public Print {
+ public:
+  size_t write(uint8_t c) override {
+    Serial.write(c);
+#if USE_WIFI
+    if (c == '\n') {
+      line += '\n';
+      if (netClient && netClient.connected()) netClient.print(line);
+      line = "";
+    } else if (c != '\r' && line.length() < 120) {
+      line += (char)c;
+    }
+#endif
+    return 1;
+  }
+ private:
+  String line;
+};
+Link out;
 
 // ---------- Pins ----------
 const int BUTTON_PIN = 2;
@@ -185,8 +227,8 @@ void scanI2C() {
   for (uint8_t a = 1; a < 127; a++) {
     Wire.beginTransmission(a);
     if (Wire.endTransmission() == 0) {
-      Serial.print("I2C:0x");
-      Serial.println(a, HEX);
+      out.print("I2C:0x");
+      out.println(a, HEX);
     }
   }
 }
@@ -218,15 +260,15 @@ void triggerFall() {
   pendingStart = millis();
   lastShownSec = -1;
   lastPressTime = 0;
-  Serial.print("FALL_PENDING:");
-  Serial.println(COUNTDOWN_MS / 1000);
+  out.print("FALL_PENDING:");
+  out.println(COUNTDOWN_MS / 1000);
   lcd.setRGB(255, 160, 0);  // amber while counting down
 }
 
 // Step 2: nobody cancelled -> full alarm
 void triggerAlarm() {
   mode = FALLEN;
-  Serial.println("FALL");
+  out.println("FALL");
   showLines("I've fallen!", "Please help me");
   lcd.setRGB(255, 0, 0);
 }
@@ -238,7 +280,7 @@ void cancelFall() {
   chirpUntil = 0;
   digitalWrite(BUZZER_PIN, LOW);
   beepOn = false;
-  Serial.println("CANCEL");
+  out.println("CANCEL");
   showNormal();
 }
 
@@ -265,7 +307,7 @@ void updateFall(unsigned long now) {
   float mag;
   if (!readAccelMag(mag)) return;
   lastMag = mag;
-  if (streamMag) { Serial.print("MAG:"); Serial.println(mag, 2); }
+  if (streamMag) { out.print("MAG:"); out.println(mag, 2); }
 
   if (mode == NORMAL) {
     // A fall shows up as free-fall (near 0g) and/or a hard impact spike.
@@ -327,7 +369,7 @@ void updateButton(unsigned long now) {
         else lastPressTime = now;
       } else {
         if (mode == IMPACT) { mode = NORMAL; stillStart = 0; }  // they're moving the button: fine
-        Serial.println("BTN");
+        out.println("BTN");
       }
     }
   }
@@ -338,8 +380,8 @@ void updateLight(unsigned long now) {
   if (now - lastLightSend < 1000) return;
   lastLightSend = now;
   lightValue = analogRead(LIGHT_PIN);
-  Serial.print("LIGHT:");
-  Serial.println(lightValue);
+  out.print("LIGHT:");
+  out.println(lightValue);
   if (mode == NORMAL) setNormalColor();
 }
 
@@ -363,20 +405,20 @@ void handleCommand(String cmd) {
     else if (mode == IMPACT) { mode = NORMAL; stillStart = 0; }
   } else if (cmd == "FALLDET:ON") {
     fallDetection = true;
-    Serial.println("FALLDET:ON");
+    out.println("FALLDET:ON");
   } else if (cmd == "FALLDET:OFF") {
     fallDetection = false;
     if (mode == PENDING || mode == FALLEN) cancelFall();
     else if (mode == IMPACT) { mode = NORMAL; stillStart = 0; }
-    Serial.println("FALLDET:OFF");
+    out.println("FALLDET:OFF");
   } else if (cmd == "PING") {
-    Serial.println("READY");
+    out.println("READY");
   } else if (cmd == "DIAG") {
-    Serial.print("ACCEL:");
-    Serial.print(accelName());
-    if (accelOk) { Serial.print(" @0x"); Serial.print(accelAddr, HEX); }
-    Serial.print(" mag=");
-    Serial.println(lastMag, 2);
+    out.print("ACCEL:");
+    out.print(accelName());
+    if (accelOk) { out.print(" @0x"); out.print(accelAddr, HEX); }
+    out.print(" mag=");
+    out.println(lastMag, 2);
     scanI2C();
   } else if (cmd == "STREAM") {
     streamMag = !streamMag;
@@ -395,6 +437,47 @@ void readSerial() {
   }
 }
 
+// ---------- WiFi link ----------
+#if USE_WIFI
+String netBuf = "";
+unsigned long lastWifiTry = 0;
+unsigned long lastNetPoll = 0;
+
+bool wifiConnect() {
+  lastWifiTry = millis();
+  if (WiFi.status() == WL_NO_MODULE) return false;
+  WiFi.begin(WIFI_SSID, WIFI_PASS);  // blocks a few seconds
+  unsigned long t = millis();
+  while (WiFi.status() == WL_CONNECTED && WiFi.localIP() == IPAddress(0, 0, 0, 0) && millis() - t < 4000) delay(100);
+  if (WiFi.status() != WL_CONNECTED) return false;
+  netServer.begin();
+  out.print("WIFI:");
+  out.println(WiFi.localIP());
+  return true;
+}
+
+void updateNet(unsigned long now) {
+  if (now - lastNetPoll < 20) return;  // each WiFi call talks to the radio chip; don't spam it
+  lastNetPoll = now;
+  if (WiFi.status() != WL_CONNECTED) {
+    // retry in the background, but never in the middle of a fall countdown or alarm
+    if (mode == NORMAL && now - lastWifiTry > 15000) wifiConnect();
+    return;
+  }
+  WiFiClient c = netServer.available();
+  if (c) netClient = c;  // the laptop (re)connected
+  while (netClient && netClient.available()) {
+    char ch = netClient.read();
+    if (ch == '\n') {
+      handleCommand(netBuf);
+      netBuf = "";
+    } else if (ch != '\r' && netBuf.length() < 64) {
+      netBuf += ch;
+    }
+  }
+}
+#endif
+
 // ---------- Main ----------
 void setup() {
   Serial.begin(115200);
@@ -410,21 +493,36 @@ void setup() {
 
   accelOk = initAccel();
   if (accelOk) {
-    Serial.print("ACCEL:");
-    Serial.println(accelName());
+    out.print("ACCEL:");
+    out.println(accelName());
   } else {
-    Serial.println("ERR:no accelerometer found, I2C devices:");
+    out.println("ERR:no accelerometer found, I2C devices:");
     scanI2C();
   }
 
+#if USE_WIFI
+  showLines("Joining WiFi", WIFI_SSID);
+  if (wifiConnect()) {
+    IPAddress ip = WiFi.localIP();
+    showLines("WiFi connected", String(ip[0]) + "." + ip[1] + "." + ip[2] + "." + ip[3]);
+    delay(2500);  // time to read the address
+  } else {
+    showLines("WiFi failed", "USB still works");
+    delay(1500);
+  }
+#else
   delay(1000);
+#endif
   showNormal();
-  Serial.println("READY");
+  out.println("READY");
 }
 
 void loop() {
   unsigned long now = millis();
   readSerial();
+#if USE_WIFI
+  updateNet(now);
+#endif
   updateButton(now);
   updateFall(now);
   updateLight(now);
