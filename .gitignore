@@ -8,4 +8,4 @@ node_modules/
 frontend/build/
 
 # Arduino Wi-Fi password
-firmware/guardian/secrets.h
+firmware/sightsea/secrets.h

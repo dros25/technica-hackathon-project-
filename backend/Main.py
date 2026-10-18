@@ -1,5 +1,5 @@
 """
-Guardian backend (Technica 2026)
+SightSea backend (Technica 2026)
 
 Run:   cd backend && python Main.py
 .env:  GEMINI_API_KEY=...        (required for narration)
@@ -353,7 +353,7 @@ _sim_fall_timer = None  # simulated test countdown when no wearable is connected
 @app.route("/health")
 def health():
     return jsonify({
-        "status": "Guardian backend online",
+        "status": "SightSea backend online",
         "hardware": "mock" if getattr(hw, "is_mock", False) else "arduino",
         "wearable": {
             "connected": getattr(hw, "connected", False),
@@ -547,7 +547,7 @@ def test_event(event_type):
 @app.route("/<path:path>")
 def frontend(path):
     if not FRONTEND_BUILD:
-        return jsonify({"status": "Guardian backend online (no frontend build yet)"})
+        return jsonify({"status": "SightSea backend online (no frontend build yet)"})
     full = os.path.join(FRONTEND_BUILD, path)
     if path and os.path.isfile(full):
         return send_from_directory(FRONTEND_BUILD, path)

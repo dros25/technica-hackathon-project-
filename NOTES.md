@@ -1,8 +1,8 @@
-# Guardian: project notes
+# SightSea: project notes
 
 **Read this first** (people and AI assistants alike). Update it when you change how something works.
 
-Guardian is a hands-free guide for blind and low-vision walkers (Technica 2026). A phone on the chest watches the path and warns about anything coming at you fast; a wrist camera answers "what am I pointing at?"; a wearable handles fall detection and asks passersby for help.
+SightSea is a hands-free guide for blind and low-vision walkers (Technica 2026). A phone on the chest watches the path and warns about anything coming at you fast; a wrist camera answers "what am I pointing at?"; a wearable handles fall detection and asks passersby for help.
 
 ---
 
@@ -60,7 +60,7 @@ Tuning lives in the "Tunables" blocks at the top of both files (time-to-contact 
 ### Wrist camera, "point to ask" (`backend/wrist_camera.py`)
 A USB webcam on the forearm, plugged into the laptop. With it connected, pressing the wearable button describes what the wrist camera sees; the **chest phone speaks** the answer (one voice). Without it, the button describes from the chest camera. Pick the camera with `WRIST_CAMERA=` in `.env`; check the aim at `http://localhost:5000/wrist/snapshot.jpg`.
 
-### Wearable (`firmware/guardian/guardian.ino`, laptop side `backend/hardware.py`)
+### Wearable (`firmware/sightsea/sightsea.ino`, laptop side `backend/hardware.py`)
 Arduino UNO R4 WiFi + Grove shield: button D2, buzzer D3, light sensor A0, accelerometer and LCD on I2C. ("D2" = the shield socket wired to digital pin 2.) Fall = free-fall or impact, then stillness, then a **30 s countdown** (double-click the button or tap "I'm okay" to cancel), then the alarm.
 
 **Button** (one button; patterns detected on the board, also listed in the app's Settings):
@@ -80,7 +80,7 @@ It talks to the laptop over **USB, Wi-Fi, or both** (same messages either way; U
 The laptop sits on a table; the wearable is powered by the iPhone and talks over the iPhone's hotspot.
 1. **iPhone:** Settings > General > About > **Name**: rename it to something plain like `IanPhone` (iPhone names use a curly apostrophe, "Ian’s iPhone", that won't match one typed into the firmware). Then Settings > Personal Hotspot > turn on **Allow Others to Join** and **Maximize Compatibility** (the board only uses 2.4 GHz Wi-Fi). Keep that screen open while things connect the first time.
 2. **Laptop:** join the iPhone's hotspot, then run `start.bat`. It sets the hotspot to a **Private** network and adds a firewall rule for the wearable if it can; if it says it can't (needs admin), follow what it prints. When Windows asks about Python, **allow it on private and public networks.**
-3. **Firmware:** in `firmware/guardian/`, copy `secrets.example.h` to `secrets.h`, fill in the hotspot name (exactly as renamed) and password, and upload with the Arduino IDE (USB, once). `secrets.h` is gitignored.
+3. **Firmware:** in `firmware/sightsea/`, copy `secrets.example.h` to `secrets.h` (made one before the rename? move it from the old `firmware/guardian/` folder), fill in the hotspot name (exactly as renamed) and password, and upload with the Arduino IDE (USB, once). `secrets.h` is gitignored.
 4. **Power:** unplug from the laptop and plug the Arduino into the **iPhone 15's USB-C port** (USB-C cable). The LCD shows "Wi-Fi..." then the normal message; within a few seconds the phone says "Wearable connected over Wi-Fi."
 5. **If it never connects:** check the backend window. After 30 s without the wearable it prints a checklist, including "this laptop's addresses". Put that address in `secrets.h` as `#define LAPTOP_IP 172,20,10,2` (commas, not dots) and upload again. Some hotspots block the broadcast the board uses to find the laptop.
 

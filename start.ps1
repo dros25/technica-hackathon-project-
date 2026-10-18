@@ -1,4 +1,4 @@
-# Guardian one-click start (Windows)
+# SightSea one-click start (Windows)
 #
 # Double-click start.bat (or run: powershell -ExecutionPolicy Bypass -File start.ps1)
 #   - checks Node.js, Python and ngrok, and installs any that are missing (winget)
@@ -152,20 +152,20 @@ foreach ($net in $publicNets) {
         Warn "Fix: Settings > Network & internet > Wi-Fi > $($net.Name) > Network profile type: Private"
     }
 }
-$rule = netsh advfirewall firewall show rule name="Guardian wearable" 2>$null
+$rule = netsh advfirewall firewall show rule name="SightSea wearable" 2>$null
 if ($LASTEXITCODE -ne 0) {
-    netsh advfirewall firewall add rule name="Guardian wearable" dir=in action=allow protocol=UDP localport=5005 2>$null | Out-Null
+    netsh advfirewall firewall add rule name="SightSea wearable" dir=in action=allow protocol=UDP localport=5005 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) { Ok "Firewall rule added for the wearable (UDP 5005)" }
     else {
         Warn "Couldn't add a firewall rule (needs admin). Only matters for the Wi-Fi wearable. If it never connects,"
         Warn "run PowerShell as administrator once and paste:"
-        Write-Host '    netsh advfirewall firewall add rule name="Guardian wearable" dir=in action=allow protocol=UDP localport=5005'
+        Write-Host '    netsh advfirewall firewall add rule name="SightSea wearable" dir=in action=allow protocol=UDP localport=5005'
     }
 } else { Ok "Firewall rule for the wearable is in place" }
 if (-not $publicNets) { Ok "Network type is fine" }
 
 # ---------- 6. Free port 5000 / stop old copies ----------
-Step "Starting Guardian"
+Step "Starting SightSea"
 $old = Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue
 if ($old) {
     Warn "Something is already using port 5000 - stopping it so the new backend can start."
@@ -202,7 +202,7 @@ if (-not $public) { Fail "ngrok didn't give a link. Check the ngrok window for t
 try { Set-Clipboard -Value $public } catch {}
 Write-Host ""
 Write-Host "  ============================================================" -ForegroundColor Green
-Write-Host "   Guardian is live:  $public" -ForegroundColor Green
+Write-Host "   SightSea is live:  $public" -ForegroundColor Green
 Write-Host "   (copied to your clipboard - open it on any phone, anywhere)" -ForegroundColor Green
 Write-Host "  ============================================================" -ForegroundColor Green
 Write-Host ""

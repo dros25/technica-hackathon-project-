@@ -22,14 +22,15 @@ const WRIST_WAIT_MS = 10000;        // live narration holds off while a wrist de
 
 function loadSetting(key, fallback) {
   try {
-    const v = localStorage.getItem('guardian.' + key);
+    let v = localStorage.getItem('sightsea.' + key);
+    if (v === null) v = localStorage.getItem('guardian.' + key); // settings saved under the old name
     return v === null ? fallback : JSON.parse(v);
   } catch {
     return fallback;
   }
 }
 function saveSetting(key, value) {
-  try { localStorage.setItem('guardian.' + key, JSON.stringify(value)); } catch { /* private mode */ }
+  try { localStorage.setItem('sightsea.' + key, JSON.stringify(value)); } catch { /* private mode */ }
 }
 
 function grabFrame(video, maxWidth) {
@@ -679,7 +680,7 @@ export default function App() {
             <path d="M2 26c4 0 4-4 8-4s4 4 8 4 4-4 8-4 4 4 4 4" />
             <circle cx="16" cy="9" r="5" />
           </svg>
-          Guardian
+          SightSea
         </h1>
         <p className={`status status-${status.tone}`} {...hover(status.text)} tabIndex={0}>
           <span className="status-dot" aria-hidden="true" />
@@ -722,7 +723,7 @@ export default function App() {
           Stop everything
         </button>
 
-        <div className="modes" role="radiogroup" aria-label="How Guardian describes the scene">
+        <div className="modes" role="radiogroup" aria-label="How SightSea describes the scene">
           <button
             type="button"
             role="radio"

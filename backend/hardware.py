@@ -1,9 +1,9 @@
 """
-hardware.py - laptop-side bridge to the Guardian Arduino, over USB and/or Wi-Fi.
+hardware.py - laptop-side bridge to the SightSea Arduino, over USB and/or Wi-Fi.
 
 The Arduino speaks the same one-line messages either way:
   USB:   serial at 115200 baud (as before)
-  Wi-Fi: UDP on the phone's hotspot. The Arduino sends "G1|<id>|<line>" to port 5005 here
+  Wi-Fi: UDP on the phone's hotspot. The Arduino sends "S1|<id>|<line>" to port 5005 here
          (broadcast until it knows our address); we send commands back to it on port 5006.
 USB wins when both are live, so nothing is handled twice.
 
@@ -39,7 +39,7 @@ except ImportError:  # Wi-Fi still works without pyserial
     list_ports = None
 
 BAUD = 115200
-DARK_LEVEL = 150             # match DARK_LEVEL in guardian.ino
+DARK_LEVEL = 150             # match DARK_LEVEL in sightsea.ino
 DARK_ALERT_COOLDOWN_S = 30
 UDP_LISTEN_PORT = 5005       # Arduino -> laptop
 UDP_ARDUINO_PORT = 5006      # laptop -> Arduino
@@ -212,7 +212,7 @@ class Hardware:
                 time.sleep(0.5)
                 continue
             msg = data.decode(errors="ignore").strip()
-            if not msg.startswith("G1|"):
+            if not msg.startswith("S1|"):
                 continue
             parts = msg.split("|", 2)
             if len(parts) < 3:
@@ -240,7 +240,7 @@ class Hardware:
         if not self._udp or not self.wifi_addr:
             return False
         self._cmd_id += 1
-        payload = f"G1|{self._cmd_id}|{cmd}".encode()
+        payload = f"S1|{self._cmd_id}|{cmd}".encode()
         try:
             for _ in range(copies):  # UDP can drop packets; the Arduino ignores the repeat
                 self._udp.sendto(payload, self.wifi_addr)

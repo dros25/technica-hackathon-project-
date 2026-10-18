@@ -1,5 +1,5 @@
 /*
-  Guardian wearable - Arduino side (Technica 2026)
+  SightSea wearable - Arduino side (Technica 2026)
   Board: Arduino UNO R4 WiFi + Grove Base Shield (set shield switch to 5V)
 
   Wiring (Grove cables):
@@ -15,7 +15,7 @@
   put in your phone hotspot's name and password, and upload. Power the board from the phone
   (iPhone 15+ USB-C) or any USB battery. On iPhone turn on Personal Hotspot > Maximize
   Compatibility (the board only uses 2.4 GHz). No secrets.h = USB only, exactly as before.
-  Over Wi-Fi the same messages go by UDP: to the laptop on port 5005 as "G1|<id>|<message>",
+  Over Wi-Fi the same messages go by UDP: to the laptop on port 5005 as "S1|<id>|<message>",
   commands back on port 5006. With both USB and Wi-Fi up, the laptop uses USB and ignores the copies.
 
   Serial protocol (115200 baud, one message per line):
@@ -522,7 +522,7 @@ void wifiSendRaw(const String &payload) {
 
 // Important messages go 3 times (UDP can drop packets); the laptop ignores repeats by id
 void wifiSend(const String &line, bool important) {
-  String payload = "G1|" + String(++msgId) + "|" + line;
+  String payload = "S1|" + String(++msgId) + "|" + line;
   for (int i = 0; i < (important ? 3 : 1); i++) wifiSendRaw(payload);
 }
 
@@ -534,7 +534,7 @@ void readWifi() {
     int n = udp.read(buf, sizeof(buf) - 1);
     buf[n > 0 ? n : 0] = 0;
     String msg(buf);
-    if (msg.startsWith("G1|")) {
+    if (msg.startsWith("S1|")) {
       int bar = msg.indexOf('|', 3);
       if (bar > 0) {
         long id = msg.substring(3, bar).toInt();
@@ -574,7 +574,7 @@ void setup() {
   Wire.begin();
 
   lcd.begin(16, 2);
-  showLines("Guardian", "Starting...");
+  showLines("SightSea", "Starting...");
   lcd.setRGB(0, 80, 255);
 
   accelOk = initAccel();
@@ -587,7 +587,7 @@ void setup() {
   }
 
 #ifdef USE_WIFI
-  showLines("Guardian", "Wi-Fi...");
+  showLines("SightSea", "Wi-Fi...");
   wifiConnect(true);
 #endif
 
