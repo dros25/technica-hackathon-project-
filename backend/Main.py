@@ -23,6 +23,8 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
+from wrist_camera import WristCamera  # backend/wrist_camera.py
+
 load_dotenv()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -53,6 +55,7 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 ELEVEN_VOICE_ID = os.getenv("ELEVEN_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")
 ELEVEN_MODEL = os.getenv("ELEVEN_MODEL", "eleven_flash_v2_5")  # fast + uses fewer credits
 
+
 def key_tag(name):
     """Last 4 characters of a key, so you can tell WHOSE key a laptop is using without exposing it."""
     value = (os.getenv(name) or "").strip()
@@ -61,6 +64,7 @@ def key_tag(name):
 
 # ---------- AI clients (each one is optional so the server still boots) ----------
 gemini_client = None
+genai_types = None
 if os.getenv("GEMINI_API_KEY"):
     try:
         from google import genai
@@ -167,8 +171,6 @@ def load_hardware():
 hw = load_hardware()
 
 # ---------- Wrist camera ("point to ask") ----------
-from wrist_camera import WristCamera  # backend/wrist_camera.py
-
 wrist = WristCamera()
 
 # Events the server itself creates (wrist descriptions), handed to the phone with the wearable's
@@ -345,6 +347,7 @@ FRONTEND_BUILD = next(
 app = Flask(__name__, static_folder=None)  # disable Flask's /static so React's /static/js works
 CORS(app)
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10 MB images max
+_sim_fall_timer = None  # simulated test countdown when no wearable is connected (see /test)
 
 
 @app.route("/health")
@@ -504,9 +507,6 @@ def alarm():
     on = bool((request.get_json(silent=True) or {}).get("on", False))
     hw.alarm(on)
     return jsonify({"status": "success", "on": on})
-
-
-_sim_fall_timer = None
 
 
 @app.route("/test/<event_type>", methods=["POST", "GET"])
