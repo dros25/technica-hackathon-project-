@@ -443,17 +443,48 @@ String netBuf = "";
 unsigned long lastWifiTry = 0;
 unsigned long lastNetPoll = 0;
 
+String wifiProblem = "";  // why the last join failed, for the LCD
+void diagnoseWifi();
+
 bool wifiConnect() {
   lastWifiTry = millis();
-  if (WiFi.status() == WL_NO_MODULE) return false;
-  WiFi.begin(WIFI_SSID, WIFI_PASS);  // blocks a few seconds
+  if (WiFi.status() == WL_NO_MODULE) { wifiProblem = "No WiFi chip"; return false; }
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
   unsigned long t = millis();
-  while (WiFi.status() == WL_CONNECTED && WiFi.localIP() == IPAddress(0, 0, 0, 0) && millis() - t < 4000) delay(100);
-  if (WiFi.status() != WL_CONNECTED) return false;
+  // give it up to 10 s to join and get an address from the hotspot
+  while ((WiFi.status() != WL_CONNECTED || WiFi.localIP() == IPAddress(0, 0, 0, 0)) && millis() - t < 10000) delay(200);
+  if (WiFi.status() != WL_CONNECTED) {
+    diagnoseWifi();
+    return false;
+  }
+  wifiProblem = "";
   netServer.begin();
   out.print("WIFI:");
   out.println(WiFi.localIP());
   return true;
+}
+
+// Join failed: is the hotspot visible at all? (not visible = name wrong or 5 GHz only;
+// visible = probably the password)
+void diagnoseWifi() {
+  out.print("ERR:WiFi join failed, status ");
+  out.println(WiFi.status());
+  int n = WiFi.scanNetworks();
+  bool seen = false;
+  out.print("ERR:networks I can see: ");
+  for (int i = 0; i < n; i++) {
+    if (i) out.print(", ");
+    out.print(WiFi.SSID(i));
+    if (strcmp(WiFi.SSID(i), WIFI_SSID) == 0) seen = true;
+  }
+  out.println(n <= 0 ? "(none)" : "");
+  if (seen) {
+    wifiProblem = "Check password";
+    out.println("ERR:your hotspot is visible, so the password is probably wrong");
+  } else {
+    wifiProblem = "Hotspot not seen";
+    out.println("ERR:your hotspot is not visible: check the exact name, and turn on Maximize Compatibility (2.4 GHz)");
+  }
 }
 
 void updateNet(unsigned long now) {
@@ -510,8 +541,8 @@ void setup() {
     showLines("WiFi connected", String(ip[0]) + "." + ip[1] + "." + ip[2] + "." + ip[3]);
     delay(2500);  // time to read the address
   } else {
-    showLines("WiFi failed", "USB still works");
-    delay(1500);
+    showLines("WiFi failed", wifiProblem);
+    delay(4000);  // time to read why
   }
 #else
   delay(1000);
