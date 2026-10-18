@@ -47,6 +47,18 @@ const UI_PHRASES = [
   'Looking where you are pointing…',
 ];
 
+const TAP_HINT = 'Double tap to use.';
+// What a single tap on a control says (the same text is downloaded ahead in the natural voice)
+function tapLabel(control) {
+  const label = control.getAttribute('data-say') || control.getAttribute('aria-label')
+    || (control.innerText || '').replace(/\s+/g, ' ').trim();
+  return label ? label.replace(/[.!?]?$/, '.') : '';
+}
+function tapControls() {
+  return Array.from(document.querySelectorAll('button, [role="radio"], label, summary, a'))
+    .filter((c) => !c.closest('[data-direct]'));
+}
+
 function loadSetting(key, fallback) {
   try {
     let v = localStorage.getItem('sightsea.' + key);
@@ -384,8 +396,10 @@ export default function App() {
     saveSetting('voiceId', voiceId);
     if (!voiceId || !premiumVoice) return undefined;
     let cancelled = false;
-    const phrases = [...ALERT_PHRASES.filter((p) => !/!$/.test(p)), ...UI_PHRASES];
     const t = setTimeout(async () => {
+      // the alerts, then what a tap on each control on screen says (Settings' too when it's open)
+      const labels = tapControls().map(tapLabel).filter(Boolean);
+      const phrases = [...new Set([...ALERT_PHRASES.filter((p) => !/!$/.test(p)), TAP_HINT, ...labels, ...UI_PHRASES])];
       for (const p of phrases) {
         if (cancelled) return;
         try { await naturalAudio(p); } catch { return; } // out of credits or offline: stop
@@ -456,12 +470,20 @@ export default function App() {
       e.stopPropagation();
       t.control = control;
       t.at = now;
-      const label = control.getAttribute('data-say') || control.getAttribute('aria-label')
-        || (control.innerText || '').replace(/\s+/g, ' ').trim();
+      const label = tapLabel(control);
       if (label) {
-        const hint = t.hints < 3 ? ' Double tap to use.' : '';
-        t.hints += 1;
-        speak(label.replace(/[.!?]?$/, '.') + hint, 'high', true);
+        speak(label, 'high', true);
+        if (t.hints < 3) { // the first few times, explain how to use it
+          t.hints += 1;
+          const id = speechRef.current.id;
+          const start = Date.now();
+          const tick = () => {
+            if (speechRef.current.id !== id || Date.now() - start > 8000) return; // something else spoke
+            if (speechRef.current.priority) { setTimeout(tick, 120); return; }
+            speak(TAP_HINT, 'low', true);
+          };
+          setTimeout(tick, 300);
+        }
       }
     };
     document.addEventListener('pointerdown', onDown, true);
