@@ -67,9 +67,86 @@ function frameDifference(a, b) {
   return sum / a.length;
 }
 
+
+// ---------- Icons and decoration (all hidden from screen readers) ----------
+const iconProps = {
+  viewBox: '0 0 24 24', width: 24, height: 24, fill: 'none', stroke: 'currentColor',
+  strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true,
+};
+const GearIcon = () => (
+  <svg {...iconProps}>
+    <circle cx="12" cy="12" r="3" />
+    <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+  </svg>
+);
+const CameraIcon = () => (
+  <svg {...iconProps} width={18} height={18}>
+    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+    <circle cx="12" cy="13" r="4" />
+  </svg>
+);
+const SpeakerIcon = () => (
+  <svg {...iconProps}>
+    <path d="M11 5 6 9H2v6h4l5 4V5z" />
+    <path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14" />
+  </svg>
+);
+const HandIcon = () => (
+  <svg {...iconProps}>
+    <path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v6M10 10.5V6a2 2 0 0 0-4 0v8" />
+    <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-6-2.4l-3.6-3.6a2 2 0 0 1 2.8-2.8L6 15" />
+  </svg>
+);
+const SonarIcon = () => (
+  <svg {...iconProps}>
+    <circle cx="12" cy="12" r="2" />
+    <path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 16.2a6 6 0 0 0 0-8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 19.1a10 10 0 0 0 0-14.2" />
+  </svg>
+);
+
+// Seaweed, small fish and bubbles drifting behind the app. Purely decorative.
+const Fish = ({ x, y, s = 1, flip = false, className }) => (
+  <g className={className} transform={`translate(${x} ${y}) scale(${flip ? -s : s} ${s})`}>
+    <path d="M0 0c6-7 16-8 24-3l7-5v16l-7-5C16 8 6 7 0 0z" />
+    <circle cx="7" cy="-1.5" r="1.4" className="fish-eye" />
+  </g>
+);
+const Weed = ({ d, className = 'weed' }) => <path className={className} d={d} />;
+function SeaDecor() {
+  return (
+    <div className="sea-decor" aria-hidden="true">
+      <svg className="decor-left" viewBox="0 0 160 260" preserveAspectRatio="xMinYMax meet">
+        <Weed d="M30 260C18 220 42 190 28 150S40 90 30 50" />
+        <Weed className="weed weed-b" d="M58 260C50 225 70 205 60 170S72 120 64 95" />
+        <Weed className="weed weed-c" d="M12 260C6 240 20 225 12 205" />
+        <circle className="bubble" cx="96" cy="120" r="7" />
+        <circle className="bubble" cx="110" cy="92" r="4" />
+        <circle className="bubble" cx="88" cy="60" r="5" />
+      </svg>
+      <svg className="decor-right" viewBox="0 0 160 260" preserveAspectRatio="xMaxYMax meet">
+        <Weed d="M130 260C142 222 118 196 132 160S122 110 130 80" />
+        <Weed className="weed weed-b" d="M104 260C112 232 94 214 104 186" />
+        <circle className="bubble" cx="60" cy="150" r="6" />
+        <circle className="bubble" cx="74" cy="118" r="3.5" />
+      </svg>
+      <svg className="decor-fish fish-pos-a" viewBox="-2 -12 38 24">
+        <Fish x={34} y={0} flip className="fish fish-a" />
+      </svg>
+      <svg className="decor-fish fish-pos-b" viewBox="-2 -12 38 24">
+        <Fish x={0} y={0} className="fish fish-b" />
+      </svg>
+      <svg className="decor-bubbles" viewBox="0 0 40 60">
+        <circle className="bubble" cx="20" cy="48" r="7" />
+        <circle className="bubble" cx="30" cy="24" r="4.5" />
+        <circle className="bubble" cx="14" cy="8" r="3" />
+      </svg>
+    </div>
+  );
+}
+
 export default function App() {
   const [mode, setMode] = useState('tap'); // 'tap' | 'live'
-  const [caption, setCaption] = useState('Tap the porthole to hear what is ahead of you.');
+  const [caption, setCaption] = useState("Tap the camera view to hear what's ahead of you.");
   const [busy, setBusy] = useState(false);
   const [online, setOnline] = useState(null);
   const [wearable, setWearable] = useState({ connected: true, mock: false });
@@ -93,6 +170,7 @@ export default function App() {
 
   const videoRef = useRef(null);
   const overlayRef = useRef(null);
+  const settingsRef = useRef(null);
   const watcherRef = useRef(null);
   const audioCtxRef = useRef(null);
   const lastHazardRef = useRef(0);
@@ -574,7 +652,7 @@ export default function App() {
       ? (hazardOn
         ? "Live guide on. I'll warn you if something comes at you fast, and speak when something new appears."
         : "Live guide on. I'll speak when something new appears.")
-      : 'Tap mode on. Tap the porthole or press your button to hear what is ahead.';
+      : 'Tap mode on. Tap the camera view or press your button to hear what is ahead.';
     setCaption(msg);
     speak(msg);
   };
@@ -709,8 +787,8 @@ export default function App() {
       : !wearable.connected
         ? { text: 'Wearable disconnected', tone: 'alert' }
         : wearable.mock
-          ? { text: 'Online, demo wearable', tone: 'ok' }
-          : { text: 'Online, wearable connected', tone: 'ok' };
+          ? { text: 'Demo wearable', tone: 'ok' }
+          : { text: 'Wearable connected', tone: 'ok' };
 
   const hazardPill = {
     off: {
@@ -731,54 +809,93 @@ export default function App() {
       ? 'Live guide is on. Tap for a full description'
       : 'Tap to describe what is ahead';
 
+  const hasCamera = cameraReady || cameraSource === 'wearable';
+  const liveTag = mode !== 'live'
+    ? { text: 'Tap to describe', tone: 'quiet' }
+    : cameraSource === 'wearable' || !hazardOn || hazardState === 'off'
+      ? { text: 'Live', tone: 'live' }
+      : hazardState === 'on'
+        ? { text: 'Live, hazard watch on', tone: 'live' }
+        : { text: hazardPill.text, tone: hazardPill.tone === 'alert' ? 'alert' : 'live' };
+
+  const openSettings = () => {
+    const d = settingsRef.current;
+    if (!d) return;
+    d.open = true;
+    d.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const summary = d.querySelector('summary');
+    if (summary) summary.focus({ preventScroll: true });
+  };
+
   return (
     <div className={`app ${mode === 'live' ? 'is-live' : ''}`}>
+      <SeaDecor />
+
       <header className="topbar">
-        <h1 className="brand">
-          <svg className="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
-            {/* an eye above the waves: sight + sea */}
-            <path d="M5 10c3-4.5 7-6.5 11-6.5s8 2 11 6.5c-3 4.5-7 6.5-11 6.5S8 14.5 5 10z" />
-            <circle className="pupil" cx="16" cy="10" r="2.6" />
-            <path className="wave" d="M2 22c3.5 0 3.5-3 7-3s3.5 3 7 3 3.5-3 7-3 3.5 3 7 3" />
-            <path className="wave" d="M2 28c3.5 0 3.5-3 7-3s3.5 3 7 3 3.5-3 7-3 3.5 3 7 3" />
-          </svg>
-          SightSea
-        </h1>
-        <p className={`status status-${status.tone}`} {...hover(status.text)} tabIndex={0}>
-          <span className="status-dot" aria-hidden="true" />
-          {status.text}
-        </p>
-        <p className={`status status-${hazardPill.tone}`} {...hover(hazardPill.text.replace('·', ','))} tabIndex={0}>
-          <span className="status-dot" aria-hidden="true" />
-          {hazardPill.text}
-        </p>
+        <div className="brand-wrap">
+          <h1 className="brand">
+            <span className="brand-tile" aria-hidden="true">
+              <svg className="brand-mark" viewBox="0 0 32 32">
+                {/* an eye above the waves: sight + sea */}
+                <path d="M5 11c3-4.5 7-6.5 11-6.5s8 2 11 6.5c-3 4.5-7 6.5-11 6.5S8 15.5 5 11z" />
+                <circle className="pupil" cx="16" cy="11" r="2.6" />
+                <path d="M3 24c3.3 0 3.3-3 6.5-3s3.3 3 6.5 3 3.3-3 6.5-3 3.3 3 6.5 3" />
+              </svg>
+            </span>
+            SightSea
+          </h1>
+          <p className="tagline">Your visual guide</p>
+        </div>
+        <div className="topbar-actions">
+          <p className={`status status-${status.tone}`} {...hover(status.text)} tabIndex={0}>
+            <span className="status-dot" aria-hidden="true" />
+            {status.text}
+          </p>
+          <button type="button" className="settings-btn" onClick={openSettings} {...hover('Open settings')}>
+            <GearIcon />
+            <span>Settings</span>
+          </button>
+        </div>
       </header>
 
       <main className="stage">
-        <button
-          type="button"
-          className={`porthole ${busy ? 'is-busy' : ''} ${cameraReady || cameraSource === 'wearable' ? 'has-camera' : ''}`}
-          onClick={() => describe('tap')}
-          aria-label={portholeLabel}
-          aria-busy={busy}
-          autoFocus
-          {...hover(portholeLabel)}
-        >
-          <span className="sonar" aria-hidden="true"><i /><i /><i /></span>
-          <span className="porthole-glass">
+        <div className={`viewport ${busy ? 'is-busy' : ''} ${hasCamera ? 'has-camera' : ''}`}>
+          <button
+            type="button"
+            className="feed"
+            onClick={() => describe('tap')}
+            aria-label={portholeLabel}
+            aria-busy={busy}
+            autoFocus
+            {...hover(portholeLabel)}
+          >
             {/* The video stays mounted so the hazard watcher keeps its element */}
             <video ref={videoRef} autoPlay playsInline muted aria-hidden="true" hidden={cameraSource === 'wearable'} />
             {cameraSource === 'wearable' && (
               <img className="wearable-view" src={`${API}/camera/stream`} alt="" aria-hidden="true" />
             )}
             <canvas ref={overlayRef} className="overlay" aria-hidden="true" />
-          </span>
-          <span className="porthole-label" aria-hidden="true">
-            {busy ? 'Looking…' : mode === 'live' ? 'Tap for detail' : 'Tap to describe'}
-          </span>
-        </button>
+            <span className="feed-tags" aria-hidden="true">
+              <span className={`tag tag-${liveTag.tone}`}>
+                <i className="tag-dot" />
+                {liveTag.text}
+              </span>
+              <span className="tag">
+                <CameraIcon />
+                {cameraSource === 'wearable' ? 'Wearable camera' : 'Phone camera'}
+              </span>
+            </span>
+            {busy && <span className="feed-busy" aria-hidden="true">Looking…</span>}
+          </button>
 
-        <p className="caption" role="status" aria-live="polite">{caption}</p>
+          <div className="caption" role="status" aria-live="polite">
+            <span className="caption-icon" aria-hidden="true"><SpeakerIcon /></span>
+            <span className="caption-body">
+              <span className="caption-label" aria-hidden="true">SightSea</span>
+              <span className="caption-text">{caption}</span>
+            </span>
+          </div>
+        </div>
 
         <div className="modes" role="radiogroup" aria-label="How SightSea describes the scene">
           <button
@@ -789,8 +906,11 @@ export default function App() {
             onClick={() => chooseMode('tap')}
             {...hover('Tap mode. Describe the scene only when I ask')}
           >
-            <span className="mode-title">Tap mode</span>
-            <span className="mode-sub">Describe when I ask</span>
+            <span className="mode-icon" aria-hidden="true"><HandIcon /></span>
+            <span className="mode-text">
+              <span className="mode-title">Tap mode</span>
+              <span className="mode-sub">Describe when I ask</span>
+            </span>
           </button>
           <button
             type="button"
@@ -800,12 +920,15 @@ export default function App() {
             onClick={() => chooseMode('live')}
             {...hover('Live guide. Speak up whenever something new appears')}
           >
-            <span className="mode-title">Live guide</span>
-            <span className="mode-sub">Speak when things change</span>
+            <span className="mode-icon" aria-hidden="true"><SonarIcon /></span>
+            <span className="mode-text">
+              <span className="mode-title">Live guide</span>
+              <span className="mode-sub">Speak when things change</span>
+            </span>
           </button>
         </div>
 
-        <details className="settings">
+        <details className="settings" ref={settingsRef}>
           <summary {...hover('Settings')}>Settings</summary>
 
           <label className="toggle" {...hover(`Hazard watch in Live guide. Warn me when something comes at me fast. ${hazardOn ? 'On' : 'Off'}`)}>
