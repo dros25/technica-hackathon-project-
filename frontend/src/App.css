@@ -35,16 +35,18 @@ body {
   outline-offset: 4px;
 }
 
+html, body, #root { height: 100%; overflow: hidden; overscroll-behavior: none; }
 .app {
   position: relative;
-  min-height: 100dvh;
+  height: 100vh;
+  height: 100svh; /* the screen with the browser toolbar showing: stable, never jumps */
   display: flex;
   flex-direction: column;
-  padding: max(14px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+  padding: max(10px, env(safe-area-inset-top)) 14px max(12px, env(safe-area-inset-bottom));
   background:
     radial-gradient(120% 40% at 50% 0%, var(--shallows) 0%, rgba(216, 241, 240, 0) 70%),
     var(--foam);
-  overflow-x: hidden;
+  overflow: hidden;
 }
 .topbar, .stage { position: relative; z-index: 1; }
 
@@ -109,6 +111,14 @@ body {
 .brand-mark { width: 30px; height: 30px; fill: none; stroke: #fff; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
 .brand-mark .pupil { fill: #fff; stroke: none; }
 .tagline { margin: 0; font-size: 1rem; font-weight: 700; color: var(--ink-soft); }
+@media (max-width: 600px) {
+  .brand { font-size: 1.45rem; }
+  .brand-tile { width: 38px; height: 38px; border-radius: 10px; }
+  .brand-mark { width: 26px; height: 26px; }
+  .tagline { font-size: 0.95rem; }
+  .caption-icon { width: 38px; height: 38px; }
+  .caption-text { font-size: 1.15rem; }
+}
 
 .topbar-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 
@@ -132,28 +142,26 @@ body {
 /* ---------- Stage ---------- */
 .stage {
   flex: 1;
+  min-height: 0;          /* lets the camera view shrink to fit */
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
   max-width: 900px;
   width: 100%;
   margin: 0 auto;
-  padding-top: 18px;
+  padding-top: 10px;
 }
 
 /* ---------- Camera view: the big window onto the world ---------- */
 .viewport {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 10;
-  max-height: 68dvh;
-  border-radius: 26px;
-  padding: 8px;
+  flex: 1 1 auto;
+  min-height: 160px;
+  border-radius: 24px;
+  padding: 6px;
   background: var(--shell);
   box-shadow: 0 0 0 2px var(--line), 0 18px 40px rgba(11, 42, 63, 0.14);
-}
-@media (max-width: 600px) {
-  .viewport { aspect-ratio: 3 / 4; }
 }
 .viewport.is-busy { animation: glow 1.4s ease-in-out infinite; }
 @keyframes glow {
@@ -171,6 +179,7 @@ body {
   border: 0;
   border-radius: 19px;
   overflow: hidden;
+  clip-path: inset(0 round 19px); /* some browsers don't clip video to rounded corners */
   background: linear-gradient(160deg, #bfe9ec, #6fb9c6);
   color: inherit;
   font: inherit;
@@ -238,10 +247,14 @@ body {
 
 /* What SightSea just said, right below the camera view */
 .caption {
+  flex: 0 0 auto;
+  max-height: 24svh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   align-items: flex-start;
-  gap: 14px;
-  padding: 16px 18px;
+  gap: 12px;
+  padding: 12px 16px;
   border: 2px solid var(--line);
   border-radius: 18px;
   background: var(--shell);
@@ -273,11 +286,11 @@ body {
 .mode {
   display: flex;
   align-items: center;
-  gap: 14px;
-  min-height: 84px;
-  padding: 14px 16px;
+  gap: 12px;
+  min-height: 64px;
+  padding: 8px 12px;
   border: 3px solid var(--line);
-  border-radius: 18px;
+  border-radius: 16px;
   background: var(--shell);
   color: var(--ink);
   font: inherit;
@@ -302,17 +315,21 @@ body {
 .mode[aria-checked='true'] .mode-sub { color: #fff; }
 .mode[aria-checked='true'] .mode-icon { background: #fff; }
 @media (max-width: 420px) {
-  .mode { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .mode { gap: 10px; padding: 8px 10px; }
+  .mode-icon { width: 40px; height: 40px; }
+  .mode-title { font-size: 1.15rem; }
+  .mode-sub { font-size: 0.9rem; }
 }
 
 /* ---------- Settings: its own full screen ---------- */
 .settings-open {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
   width: 100%;
-  min-height: 64px;
+  min-height: 52px;
   border: 3px solid var(--lagoon);
   border-radius: 18px;
   background: var(--shell);
@@ -470,6 +487,17 @@ body {
   cursor: pointer;
 }
 .alarm-ok:focus-visible { outline-color: var(--ink); }
+
+/* Short screens (small phones with the browser toolbar showing): tighten so nothing scrolls */
+@media (max-height: 640px) {
+  .stage { gap: 8px; padding-top: 6px; }
+  .viewport { min-height: 120px; }
+  .caption { max-height: 20svh; padding: 10px 14px; }
+  .caption-label { display: none; }
+  .mode { min-height: 52px; }
+  .mode-sub { display: none; }
+  .settings-open { min-height: 46px; font-size: 1.15rem; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .weed, .tag-dot, .viewport.is-busy { animation: none !important; }
