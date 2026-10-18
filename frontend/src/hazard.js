@@ -184,7 +184,7 @@ export class HazardWatcher {
       });
       try {
         this.classifier = await ImageClassifier.createFromOptions(vision, opts('GPU'));
-      } catch (e) {
+      } catch {
         this.classifier = await ImageClassifier.createFromOptions(vision, opts('CPU'));
       }
     } catch (e) {
