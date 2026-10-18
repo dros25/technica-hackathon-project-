@@ -48,6 +48,18 @@ const UI_PHRASES = [
 ];
 
 const TAP_HINT = 'Double tap to use.';
+// Built-in (phone) voices by gender, so the fallback voice matches the chosen natural voice
+const MALE_VOICES = /\b(daniel|alex|fred|aaron|arthur|gordon|rishi|tom|oliver|reed|rocko|eddy|grandpa|ralph|albert|junior|david|mark|guy|george|james|male)\b/i;
+const FEMALE_VOICES = /\b(samantha|karen|moira|tessa|victoria|allison|ava|susan|martha|catherine|nicky|serena|kathy|fiona|veena|flo|sandy|shelley|grandma|zira|hazel|susan|jenny|aria|female)\b/i;
+function pickDeviceVoice(gender) {
+  const synth = window.speechSynthesis;
+  if (!synth || !gender) return null;
+  const want = /^f/i.test(gender) ? FEMALE_VOICES : /^m/i.test(gender) ? MALE_VOICES : null;
+  if (!want) return null;
+  const english = synth.getVoices().filter((v) => /^en/i.test(v.lang));
+  const pick = (list) => list.find((v) => /en[-_]US/i.test(v.lang) && want.test(v.name)) || list.find((v) => want.test(v.name));
+  return pick(english.filter((v) => v.localService)) || pick(english) || null;
+}
 // What a single tap on a control says (the same text is downloaded ahead in the natural voice)
 function tapLabel(control) {
   const label = control.getAttribute('data-say') || control.getAttribute('aria-label')
@@ -250,6 +262,7 @@ export default function App() {
     set priority(v) { this.p = v; this.until = v ? Date.now() + 15000 : 0; },
   });
   const voiceRef = useRef(voiceId);
+  const voiceGenderRef = useRef('');
   const ttsRef = useRef(new Map());      // "voice|text" -> Promise<audio URL>
   const ttsReadyRef = useRef(new Set()); // keys whose audio is already downloaded
   const cameraSourceRef = useRef(cameraSource);
@@ -319,6 +332,9 @@ export default function App() {
     if (!synth) { if (speechRef.current.id === id) speechRef.current.priority = null; return; }
     const u = new SpeechSynthesisUtterance(text);
     u.rate = priority === 'urgent' ? 1.25 : 1.05;
+    // same gender as the chosen natural voice, so the voice doesn't flip between a man and a woman
+    const match = pickDeviceVoice(voiceGenderRef.current);
+    if (match) { u.voice = match; u.lang = match.lang; }
     u.onend = () => { if (speechRef.current.id === id) speechRef.current.priority = null; };
     // iPhones often drop an utterance spoken right after cancel(): give it a moment
     if (synth.speaking || synth.pending) {
@@ -400,6 +416,12 @@ export default function App() {
       })
       .catch(() => {});
   }, []);
+
+  // The chosen voice's gender (for a matching phone voice when the natural one isn't available)
+  useEffect(() => {
+    const chosen = voices.find((v) => v.voice_id === voiceId);
+    voiceGenderRef.current = (chosen && chosen.gender) || '';
+  }, [voices, voiceId]);
 
   // Pre-make the alerts that must play instantly, in the chosen voice.
   // Credits matter: wait until a voice has stayed selected for a while (browsing the
@@ -609,7 +631,8 @@ export default function App() {
     const startedAt = Date.now();
     // Wearable camera: the server grabs the frame from the USB webcam plugged into it
     const fromWearable = cameraSourceRef.current === 'wearable';
-    const canvas = fromWearable ? null : grabFrame(videoRef.current, 640);
+    // Live checks send a smaller, lighter picture: faster to upload and to read
+    const canvas = fromWearable ? null : grabFrame(videoRef.current, kind === 'live' ? 480 : 640);
     if (!fromWearable && !canvas) {
       if (kind === 'tap') { setCaption(cameraMsgRef.current); speak(cameraMsgRef.current); }
       return;
@@ -625,7 +648,7 @@ export default function App() {
       if (fromWearable) {
         form.append('source', 'wearable');
       } else {
-        const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', kind === 'live' ? 0.65 : 0.8));
         form.append('image', blob, 'frame.jpg');
       }
       form.append('mode', kind);
@@ -676,8 +699,8 @@ export default function App() {
     if (fallRef.current) return; // the fall alarm owns the screen and voice
     lastHazardRef.current = Date.now();
     if (a.kind === 'path') { // something in your way that you're walking toward
-      const where = a.direction === 'ahead' ? 'ahead, in your path' : `ahead, slightly ${a.direction}`;
-      const text = `${a.name} ${where}.`;
+      const side = a.direction === 'ahead' ? '' : `, slightly ${a.direction}`;
+      const text = a.near ? `${a.name} right in front of you${side}.` : `${a.name} ahead${side}, a few steps.`;
       if (navigator.vibrate) navigator.vibrate([80, 60, 80]);
       setCaption(text);
       speak(text, 'high');

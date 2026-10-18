@@ -57,17 +57,17 @@ NARRATE_PROMPT = (
     "and distance if you can tell. No preamble."
 )
 LIVE_PROMPT = (
-    "You are a live guide for a blind person who is walking. Speak ONLY about what affects their next few "
-    "steps straight ahead: an obstacle in the walking path they could bump into or trip on (furniture, a pole, "
-    "a wall, a closed door, a bag or box on the floor), steps, stairs, a curb or drop-off, a person or vehicle "
-    "coming toward them, or a doorway or turn right in front of them. "
-    "IGNORE everything else: floor surfaces (carpet, tiles, rugs), walls or furniture off to the side, things "
-    "far away, lighting, colors, decorations, and general descriptions of the room. "
-    "Last time you said: \"{previous}\". If nothing is in the path, or it's the same thing as last time and "
-    "not clearly closer, reply with exactly: NOTHING. "
-    "Otherwise reply with ONE short phrase under 10 words: what, which way, how close. "
-    "Examples: \"Chair ahead, two steps.\" \"Stairs going down, three steps ahead.\" "
-    "\"Person coming toward you on the left.\" No preamble."
+    "You are a live guide for a blind person who is walking. Speak ONLY about what is in their walking path "
+    "straight ahead AND within about 4 steps (3 meters): an obstacle they could bump into or trip on "
+    "(furniture, a pole, a wall, a closed door, a bag or box on the floor), steps, stairs, a curb or drop-off, "
+    "a person or vehicle coming toward them, or a doorway right in front of them. "
+    "Anything farther than about 4 steps, off to the side, or on the floor surface (carpet, tiles, rugs), "
+    "lighting, colors, decorations or room descriptions: reply NOTHING. "
+    "Always say how many steps away it is. Last time you said: \"{previous}\". If it's the same thing at "
+    "the same distance, reply NOTHING; speak again only when it is closer (fewer steps) or something new appears. "
+    "Reply with ONE short phrase under 10 words, or exactly: NOTHING. "
+    "Examples: \"Chair ahead, three steps.\" \"Chair ahead, one step.\" "
+    "\"Stairs going down, two steps ahead.\" \"Person coming toward you, left, two steps.\" No preamble."
 )
 WRIST_PROMPT = (
     "A blind person is pointing their hand-mounted camera at something and asking what it is. "
@@ -263,6 +263,60 @@ def _retry_seconds(err_text):
     return int(m.group(1)) if m else 600
 
 
+# Speed: these are short answers about a picture, so skip the model's "thinking" step and cap the
+# length. Newer and older Gemini models take different settings, so try the fastest first and
+# remember per model which one it accepted.
+_fast_config_for = {}   # model -> index into _fast_configs() that worked
+
+
+def _fast_configs():
+    if not genai_types:
+        return [None]
+    out = []
+    try:
+        out.append(genai_types.GenerateContentConfig(
+            thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+            max_output_tokens=150, temperature=0.3))
+    except Exception:
+        pass
+    try:
+        out.append(genai_types.GenerateContentConfig(
+            thinking_config=genai_types.ThinkingConfig(thinking_level="low"),
+            max_output_tokens=400, temperature=0.3))
+    except Exception:
+        pass
+    out.append(None)  # plain call: always works
+    return out
+
+
+def _gemini_call(model, image_bytes, mime, prompt):
+    configs = _fast_configs()
+    start = _fast_config_for.get(model, 0)
+    last_error = None
+    for i in range(start, len(configs)):
+        try:
+            kwargs = {"config": configs[i]} if configs[i] is not None else {}
+            resp = gemini_client.models.generate_content(
+                model=model,
+                contents=[genai_types.Part.from_bytes(data=image_bytes, mime_type=mime), prompt],
+                **kwargs,
+            )
+            if not getattr(resp, "text", None) and i < len(configs) - 1:
+                continue  # an empty answer (e.g. the length cap was spent thinking): try the next settings
+            _fast_config_for[model] = i
+            return resp
+        except Exception as e:
+            text = str(e)
+            # quota / missing model: not a settings problem, let the caller handle it
+            if any(k in text for k in ("429", "RESOURCE_EXHAUSTED", "404", "NOT_FOUND")):
+                raise
+            if i < len(configs) - 1 and ("400" in text or "INVALID_ARGUMENT" in text or "thinking" in text.lower()):
+                last_error = e
+                continue  # this model doesn't take these settings: try the next set
+            raise
+    raise last_error
+
+
 def describe_image(image_bytes, mime="image/jpeg", prompt=NARRATE_PROMPT):
     """Gemini first (for the MLH prize), falling through models on quota limits, then OpenRouter."""
     if MOCK_VISION:
@@ -281,10 +335,7 @@ def describe_image(image_bytes, mime="image/jpeg", prompt=NARRATE_PROMPT):
                 errors.append(f"{model}: out of quota")  # don't waste a call
                 continue
             try:
-                resp = gemini_client.models.generate_content(
-                    model=model,
-                    contents=[genai_types.Part.from_bytes(data=image_bytes, mime_type=mime), prompt],
-                )
+                resp = _gemini_call(model, image_bytes, mime, prompt)
                 if resp.text:
                     return resp.text.strip(), f"gemini:{model}"
                 errors.append(f"{model}: empty response")
@@ -539,7 +590,10 @@ def narrate():
 
     # voice=device -> the phone speaks it itself (instant, saves ElevenLabs credits; used by live mode)
     want_audio = request.form.get("voice", "eleven") == "eleven"
+    t_voice = time.time()
     audio = speak(text, voice_id) if want_audio else None
+    if want_audio:
+        print(f"[narrate] voice in {time.time() - t_voice:.1f}s" + ("" if audio else " (no natural voice)"))
     return jsonify({"text": text, "audio": audio, "source": source})
 
 

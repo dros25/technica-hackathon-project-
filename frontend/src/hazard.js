@@ -98,11 +98,13 @@ const STALL_MS = 2500;          // no frames for this long = camera/model stalle
 const NOTICE_LABELS = { person: 'Someone', dog: 'A dog', bicycle: 'A bike', cat: 'A cat' };
 const NOTICE_TTC = 6.0;         // approaching: contact within this many seconds at this pace
 const NOTICE_MIN_SIZE = 0.12;   // and already a fair size in view (not far down the hall)
-const PATH_TTC = 4.0;           // objects in your path: about 4 s of walking away
+const PATH_TTC = 20;            // objects in your path: any steady approach counts (distance decides, not speed)
 const PATH_MIN_SIZE = 0.09;     // and big enough in view to be a few steps away (not across the room)
 const PATH_BAND = [0.35, 0.65]; // must overlap the middle of the view (where you're heading)
+const PATH_NEAR_SIZE = 0.24;    // this big in view = about one step away: "right in front of you"
 const NOTICE_FRAMES = 5;        // held this many frames in a row (~0.2 s), so a sway doesn't count
 const NOTICE_COOLDOWN_MS = 8000;
+const STAGE_GAP_MS = 1500;      // "a few steps" -> "right in front of you": at least this far apart
 
 function iou(a, b) {
   const x1 = Math.max(a.x1, b.x1), y1 = Math.max(a.y1, b.y1);
@@ -384,7 +386,10 @@ export class HazardWatcher {
       if (NOTICE_LABELS[tr.label] && onCourse && size >= NOTICE_MIN_SIZE && ttc < NOTICE_TTC * this.sensitivity) {
         tr.noticeHits = (tr.noticeHits || 0) + 1;
       } else if (!NOTICE_LABELS[tr.label] && inPath && size >= PATH_MIN_SIZE && ttc < PATH_TTC * this.sensitivity) {
-        tr.noticeHits = (tr.noticeHits || 0) + 1;
+        // how close: stage 1 = a few steps away, stage 2 = about one step (said again when it gets there)
+        const stage = size >= PATH_NEAR_SIZE ? 2 : 1;
+        tr.noticeHits = stage === tr.noticeStageSeen ? (tr.noticeHits || 0) + 1 : 1;
+        tr.noticeStageSeen = stage;
       } else {
         tr.noticeHits = 0;
       }
@@ -428,16 +433,23 @@ export class HazardWatcher {
   _maybeNotice() {
     const nowMs = performance.now();
     if (nowMs - this.lastAlert.at < GLOBAL_GAP_MS) return;
-    const tr = this.tracks.find((t) => (t.noticeHits || 0) >= NOTICE_FRAMES
-      && nowMs - (t.noticedAt || -1e9) > NOTICE_COOLDOWN_MS && nowMs - (t.alertedAt || -1e9) > NOTICE_COOLDOWN_MS);
+    const tr = this.tracks.find((t) => {
+      if ((t.noticeHits || 0) < NOTICE_FRAMES) return false;
+      if (nowMs - (t.alertedAt || -1e9) < NOTICE_COOLDOWN_MS) return false; // just got the urgent warning
+      const stage = NOTICE_LABELS[t.label] ? 1 : (t.noticeStageSeen || 1);
+      if (stage > (t.noticedStage || 0)) return nowMs - (t.noticedAt || -1e9) > STAGE_GAP_MS; // got closer
+      return nowMs - (t.noticedAt || -1e9) > NOTICE_COOLDOWN_MS * 2; // same distance: only rarely again
+    });
     if (!tr) return;
+    const stage = NOTICE_LABELS[tr.label] ? 1 : (tr.noticeStageSeen || 1);
+    tr.noticedStage = Math.max(tr.noticedStage || 0, stage);
     tr.noticedAt = nowMs;
     this.lastAlert = { at: nowMs, rank: 0 };
     const cx = tr.box.cx;
     const direction = cx < 0.38 ? 'left' : cx > 0.62 ? 'right' : 'ahead';
     const moving = !!NOTICE_LABELS[tr.label];
     const name = moving ? NOTICE_LABELS[tr.label] : (tr.refinedName || classInfo(tr.label).name);
-    this.onAlert({ kind: moving ? 'notice' : 'path', label: tr.label, name, direction, rank: 0, needsName: false });
+    this.onAlert({ kind: moving ? 'notice' : 'path', near: stage === 2, label: tr.label, name, direction, rank: 0, needsName: false });
   }
 
   // Something is expanding fast in a zone, whatever it is: warn first, name it after
