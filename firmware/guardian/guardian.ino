@@ -68,15 +68,29 @@ const int BUZZER_PIN = 3;
 const int LIGHT_PIN  = A0;
 
 // ---------- Tunables (adjust after testing) ----------
-const float IMPACT_G            = 2.5;   // spike that counts as a hit
-const float IMPACT_G_MMA        = 1.8;   // same, for the low-range MMA7660
-const float STILL_TOLERANCE_G   = 0.25;  // |mag - 1g| below this = "still"
-const unsigned long STILL_MS    = 2000;  // must be still this long after impact
-const unsigned long IMPACT_TIMEOUT_MS = 6000; // give up if no stillness by then
 const int DARK_LEVEL = 150;  // below this = dark (check real readings and adjust)
 
-const float FREEFALL_G          = 0.4;   // falling bodies read near 0g
-const unsigned long FREEFALL_MS = 60;    // free-fall must last this long
+// Fall detection, tuned for a WRIST-worn sensor (arms flail, so nothing here demands
+// perfect stillness or a clean free-fall). Three steps:
+//  1) Something happened: a drop (below DIP_G for DIP_MS) followed within DIP_TO_HIT_MS by a
+//     hit (above HIT_AFTER_DIP_G), OR one hard hit on its own (above HARD_HIT_G).
+//  2) Then mostly still: within CONFIRM_TIMEOUT_MS, a STILL_WINDOW_MS stretch where at least
+//     STILL_FRACTION of readings are within STILL_TOLERANCE_G of 1 g (some arm movement is fine).
+//  3) Then the 30 s countdown (a false alarm is cancelled with a double press or "I'm okay").
+const unsigned long SAMPLE_MS     = 10;     // read 100 times a second (the sensor's own rate)
+const float DIP_G                 = 0.6;    // a falling wrist rarely reads true 0 g; ~0.5-0.7 g
+const unsigned long DIP_MS        = 80;     // the drop must last this long
+const unsigned long DIP_TO_HIT_MS = 1000;   // the hit must come this soon after the drop
+const float HIT_AFTER_DIP_G       = 2.0;    // after a drop, a softer hit is enough
+const float HARD_HIT_G            = 3.0;    // with no drop, only a hard hit counts (cane taps are softer)
+const float HIT_AFTER_DIP_G_MMA   = 1.4;    // same two, for the low-range MMA7660 (maxes out ~2.6 g)
+const float HARD_HIT_G_MMA        = 1.8;
+const unsigned long SETTLE_MS     = 300;    // ignore the bounce right after the hit
+const float STILL_TOLERANCE_G     = 0.35;   // |g - 1| below this counts as a "still" reading
+const unsigned long STILL_WINDOW_MS = 2000; // judged over this long...
+const float STILL_FRACTION        = 0.8;    // ...and this share of readings must be still
+const unsigned long CONFIRM_TIMEOUT_MS = 10000; // no stillness by then: they got up, carry on
+const int STILL_SAMPLES = STILL_WINDOW_MS / SAMPLE_MS;   // 200
 
 // ---------- Accelerometer (auto-detects the common Grove versions) ----------
 enum AccelType { ACC_NONE, ACC_ADXL345, ACC_LIS3DH, ACC_MMA7660 };
@@ -85,7 +99,10 @@ uint8_t accelAddr = 0;
 bool accelOk = false;
 bool streamMag = false;
 float lastMag = 0;
-unsigned long freefallStart = 0;
+unsigned long dipStart = 0;      // when the current drop began (0 = not dropping)
+unsigned long dipEnd = 0;        // when the last qualifying drop ended (0 = none recently)
+uint8_t stillRing[STILL_SAMPLES];  // last 2 s after the hit: 1 = still reading
+int stillCount = 0, stillFilled = 0, stillPos = 0;
 
 rgb_lcd lcd;
 
@@ -170,7 +187,7 @@ bool initAccel() {
     if (present(a) && readReg(a, 0x00) == 0xE5) {
       accelType = ACC_ADXL345; accelAddr = a;
       writeReg(0x31, 0x0B);  // full res, +/-16g
-      writeReg(0x2C, 0x0A);  // 100 Hz
+      writeReg(0x2C, 0x0B);  // 200 Hz (a faster rate keeps short impact spikes sharp)
       writeReg(0x2D, 0x08);  // measure
       return true;
     }
@@ -180,7 +197,7 @@ bool initAccel() {
   for (uint8_t a : lis) {
     if (present(a) && readReg(a, 0x0F) == 0x33) {
       accelType = ACC_LIS3DH; accelAddr = a;
-      writeReg(0x20, 0x57);  // 100 Hz, all axes on
+      writeReg(0x20, 0x67);  // 200 Hz, all axes on (keeps short impact spikes sharp)
       writeReg(0x23, 0x38);  // +/-16g, high resolution
       return true;
     }
@@ -306,8 +323,12 @@ void updatePending(unsigned long) {
   }
 }
 
+void startStillWindow() {
+  stillCount = stillFilled = stillPos = 0;
+}
+
 void updateFall(unsigned long now) {
-  if (!fallDetection || !accelOk || now - lastAccelRead < 20) return;  // ~50 Hz
+  if (!fallDetection || !accelOk || now - lastAccelRead < SAMPLE_MS) return;  // 100 Hz
   lastAccelRead = now;
 
   float mag;
@@ -316,33 +337,41 @@ void updateFall(unsigned long now) {
   if (streamMag) { out.print("MAG:"); out.println(mag, 2); }
 
   if (mode == NORMAL) {
-    // A fall shows up as free-fall (near 0g) and/or a hard impact spike.
-    // The free-fall check matters for the small +/-1.5g MMA7660, which can't see big spikes.
-    bool freefall = false;
-    if (mag < FREEFALL_G) {
-      if (freefallStart == 0) freefallStart = now;
-      else if (now - freefallStart >= FREEFALL_MS) freefall = true;
+    // Step 1a: a drop (the wrist feels lighter while falling)
+    if (mag < DIP_G) {
+      if (dipStart == 0) dipStart = now;
     } else {
-      freefallStart = 0;
+      if (dipStart != 0 && now - dipStart >= DIP_MS) dipEnd = now;  // a real drop just ended
+      dipStart = 0;
     }
-    // MMA7660 saturates at +/-1.5g per axis, so it needs a lower impact threshold
-    float impactG = (accelType == ACC_MMA7660) ? IMPACT_G_MMA : IMPACT_G;
-    if (mag > impactG || freefall) {
+    bool afterDrop = dipEnd != 0 && now - dipEnd <= DIP_TO_HIT_MS;
+    if (dipEnd != 0 && !afterDrop) dipEnd = 0;  // too long ago: forget it
+
+    // Step 1b: the hit. Softer after a drop, hard on its own.
+    bool mma = (accelType == ACC_MMA7660);  // saturates at +/-1.5 g per axis
+    float hitG = afterDrop ? (mma ? HIT_AFTER_DIP_G_MMA : HIT_AFTER_DIP_G)
+                           : (mma ? HARD_HIT_G_MMA : HARD_HIT_G);
+    if (mag > hitG) {
       mode = IMPACT;
       impactTime = now;
       stillStart = 0;
-      freefallStart = 0;
+      dipStart = dipEnd = 0;
+      startStillWindow();
     }
   } else if (mode == IMPACT) {
-    if (fabs(mag - 1.0) < STILL_TOLERANCE_G) {
-      if (stillStart == 0) stillStart = now;
-      else if (now - stillStart >= STILL_MS) triggerFall();
-    } else {
-      stillStart = 0;  // still moving: probably got back up
+    if (now - impactTime < SETTLE_MS) return;  // the bounce right after the hit
+    // Step 2: mostly still over the last 2 s (arm movement here and there is fine)
+    uint8_t still = fabs(mag - 1.0) < STILL_TOLERANCE_G ? 1 : 0;
+    if (stillFilled == STILL_SAMPLES) stillCount -= stillRing[stillPos];
+    else stillFilled++;
+    stillRing[stillPos] = still;
+    stillCount += still;
+    stillPos = (stillPos + 1) % STILL_SAMPLES;
+    if (stillFilled == STILL_SAMPLES && stillCount >= STILL_FRACTION * STILL_SAMPLES) {
+      triggerFall();  // Step 3: countdown
+      return;
     }
-    if (mode == IMPACT && now - impactTime > IMPACT_TIMEOUT_MS) {
-      mode = NORMAL;
-    }
+    if (now - impactTime > CONFIRM_TIMEOUT_MS) mode = NORMAL;  // kept moving: they're up
   }
 }
 
