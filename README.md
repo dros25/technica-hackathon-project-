@@ -11,14 +11,14 @@ Built at **Technica 2026** (University of Maryland) by a two-person team.
 | | Feature | How it works |
 |---|---|---|
 | 🗣️ | **Tap to describe** | Double-tap the screen or press the wearable button. Gemini describes the scene in 1–2 sentences, obstacles and directions first, spoken in a natural ElevenLabs voice. |
-| 🌊 | **Live guide** | Watches continuously and speaks only when something new or important appears, so it doesn't talk nonstop. |
-| ⚠️ | **Hazard watch** | Runs **on the phone, offline, in a fraction of a second**: an object detector plus a "looming" detector that measures how fast parts of the view are expanding (time-to-contact), so it warns about anything approaching fast, even things it can't name. |
+| 🌊 | **Live guide** | Watches your path and speaks only about your next few steps: "Chair ahead, two steps." "Stairs going down." It ignores carpets, side walls and room descriptions, and never repeats itself. |
+| ⚠️ | **Hazard watch** | Runs **on the phone, offline, in a fraction of a second**. Calm heads-ups first ("Someone is coming toward you", "Table ahead, in your path"), then an urgent chime and warning if something is about to hit you. A "looming" detector measures how fast parts of the view are expanding (time to contact), so it also catches things it can't name. |
 | 👉 | **Point to ask** | A USB webcam on the wrist. Point at something and press the button: "That's a blue water bottle." Reads signs and labels too. |
 | 🆘 | **Fall detection** | Accelerometer looks for free-fall or impact followed by stillness. A 30-second spoken countdown follows (double-press the button or tap "I'm okay" to cancel), then a buzzer and red LCD saying **"I've fallen! Please help me"** for people nearby. |
 | 🔆 | **Dark warning** | A light sensor warns when it's getting dark around you. |
 | 🪧 | **LCD for passersby** | Shows a message such as "Low vision / Thanks for help", editable from the app. |
 
-**Accessible by design:** tap anything once to hear what it is, double-tap to use it (works like a screen reader). Large high-contrast "sunlit shallows" theme, Atkinson Hyperlegible font, one screen with no scrolling, every alert spoken, and a choice of ElevenLabs voices.
+**Accessible by design:** tap anything once to hear what it is, double-tap to use it, like a screen reader. Labels are pre-loaded in the natural voice so they play instantly. Large high-contrast "sunlit shallows" theme, Atkinson Hyperlegible font, one screen with no scrolling, every alert spoken, a choice of ElevenLabs voices, and decoration that stays out of screen readers and stops moving with Reduce Motion.
 
 ### Wearable button
 | Press | Action |
@@ -44,7 +44,7 @@ Built at **Technica 2026** (University of Maryland) by a two-person team.
                                               wrist webcam
 ```
 
-- **Phone:** React app served by Flask through ngrok, so any phone browser works. Hazard watch runs entirely in the browser (MediaPipe EfficientDet-Lite0 detection and tracking, plus a model-free looming detector using block-matching optical flow and scale fitting).
+- **Phone:** React app served by Flask through ngrok, so any phone browser works with nothing to install. Hazard watch runs entirely in the browser: MediaPipe EfficientDet-Lite0 detection with tracking, where an object's box growing over time gives its time to contact, plus a model-free looming detector (block-matching optical flow with scale fitting). Gemini names unfamiliar hazards a moment after the warning.
 - **Laptop:** Flask server. Gemini vision with automatic fallback across models (and OpenRouter as a backup), ElevenLabs text-to-speech with a disk cache, an OpenCV webcam reader, and the wearable link.
 - **Wearable:** Arduino UNO R4 WiFi with a Grove Base Shield. It joins the phone's hotspot; the laptop finds it automatically by scanning its subnet (USB works too). A simple line protocol carries `BTN`, `FALL_PENDING:30`, `FALL`, `LIGHT:512` and commands such as `LCD:…` and `ALARM:ON`.
 
@@ -80,6 +80,15 @@ ngrok http 5000                 # open the https link on your phone
 API keys stay in `backend/.env` on the laptop. They're never in the app or on GitHub.
 
 More detail for developers is in [NOTES.md](NOTES.md).
+
+---
+
+## What's next
+
+- A small wireless wrist camera (such as an ESP32-CAM) instead of a USB cable
+- Running the server in the cloud or on the phone, so no laptop is needed
+- Texting an emergency contact with your location when the fall alarm goes off
+- A vibration motor for silent hazard alerts, and testing with blind and low-vision users
 
 ---
 
