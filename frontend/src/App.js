@@ -347,16 +347,24 @@ export default function App() {
       .catch(() => {});
   }, []);
 
-  // Pre-make the alerts that must play instantly, in the chosen voice
+  // Pre-make the alerts that must play instantly, in the chosen voice.
+  // Credits matter: wait until a voice has stayed selected for a while (browsing the
+  // voice list costs nothing), go one phrase at a time, and stop at the first failure
+  // (e.g. out of credits). Hazard phrases are made the first time they're needed.
   useEffect(() => {
     voiceRef.current = voiceId;
     saveSetting('voiceId', voiceId);
-    if (!voiceId || !premiumVoice) return;
-    const t = setTimeout(() => {
-      [...ALERT_PHRASES, ...UI_PHRASES].forEach((p, i) => setTimeout(() => naturalAudio(p).catch(() => {}), i * 150));
-    }, 1500);
-    return () => clearTimeout(t);
-  }, [voiceId, premiumVoice, naturalAudio]);
+    if (!voiceId || !premiumVoice) return undefined;
+    let cancelled = false;
+    const phrases = [...ALERT_PHRASES.filter((p) => !/!$/.test(p)), ...UI_PHRASES];
+    const t = setTimeout(async () => {
+      for (const p of phrases) {
+        if (cancelled) return;
+        try { await naturalAudio(p); } catch { return; } // out of credits or offline: stop
+      }
+    }, settingsOpen ? 15000 : 4000);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [voiceId, premiumVoice, naturalAudio, settingsOpen]);
 
   const previewVoice = (v) => {
     stopSpeaking();

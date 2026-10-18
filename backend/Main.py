@@ -252,6 +252,7 @@ def describe_image(image_bytes, mime="image/jpeg", prompt=NARRATE_PROMPT):
 # cost no ElevenLabs credits (and survive restarts).
 TTS_CACHE_DIR = os.path.join(BASE_DIR, ".tts_cache")
 _tts_memory = {}
+_eleven_paused_until = [0.0]  # set when ElevenLabs runs out of credits
 _voice_ids = set()  # voices the account actually has (filled by list_voices)
 
 
@@ -276,6 +277,8 @@ def speak(text, voice_id=None):
             b64 = base64.b64encode(f.read()).decode()
         _tts_memory[key] = b64
         return b64
+    if time.time() < _eleven_paused_until[0]:
+        return None  # out of credits recently: let the phone speak, don't wait on a doomed call
     try:
         audio = b"".join(eleven_client.text_to_speech.convert(
             voice_id=voice_id,
@@ -284,7 +287,13 @@ def speak(text, voice_id=None):
             text=text,
         ))
     except Exception as e:
-        print(f"[speak] ElevenLabs failed, phone will use built-in voice: {e}")
+        msg = str(e)
+        if "quota_exceeded" in msg or "401" in msg:
+            _eleven_paused_until[0] = time.time() + 300
+            print("[speak] ElevenLabs is out of credits (or the key's credit limit was reached). "
+                  "Using the phone voice; will retry in 5 minutes. Raise the key's limit at elevenlabs.io.")
+        else:
+            print(f"[speak] ElevenLabs failed, phone will use built-in voice: {msg[:200]}")
         return None
     try:
         os.makedirs(TTS_CACHE_DIR, exist_ok=True)
