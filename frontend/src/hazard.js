@@ -91,11 +91,16 @@ const GLOBAL_GAP_MS = 1200;     // min gap between any two alerts (unless more u
 const CENTER_BAND = [0.3, 0.7]; // "in front of you" (fraction of frame width)
 const STALL_MS = 2500;          // no frames for this long = camera/model stalled
 
-// Gentler heads-up: a person (or dog, bike) walking toward you at a normal pace, well before
-// they'd count as a collision threat. Said once per person, in a calm voice.
+// Gentler heads-up, before anything counts as a collision threat, said once per object:
+//  - a person (or dog, bike) walking toward you: "Someone is coming toward you"
+//  - anything else in your path that you are walking toward (chair, table, bench...): "Chair in your path"
+// Getting closer = its box grows, whether it moves or you do; standing still says nothing.
 const NOTICE_LABELS = { person: 'Someone', dog: 'A dog', bicycle: 'A bike', cat: 'A cat' };
 const NOTICE_TTC = 6.0;         // approaching: contact within this many seconds at this pace
 const NOTICE_MIN_SIZE = 0.12;   // and already a fair size in view (not far down the hall)
+const PATH_TTC = 4.0;           // objects in your path: about 4 s of walking away
+const PATH_MIN_SIZE = 0.09;     // and big enough in view to be a few steps away (not across the room)
+const PATH_BAND = [0.35, 0.65]; // must overlap the middle of the view (where you're heading)
 const NOTICE_FRAMES = 5;        // held this many frames in a row (~0.2 s), so a sway doesn't count
 const NOTICE_COOLDOWN_MS = 8000;
 
@@ -375,7 +380,10 @@ export class HazardWatcher {
 
       const cls = classInfo(tr.label);
       const limit = cls.ttc * this.sensitivity;
+      const inPath = x1 < PATH_BAND[1] && x2 > PATH_BAND[0];
       if (NOTICE_LABELS[tr.label] && onCourse && size >= NOTICE_MIN_SIZE && ttc < NOTICE_TTC * this.sensitivity) {
+        tr.noticeHits = (tr.noticeHits || 0) + 1;
+      } else if (!NOTICE_LABELS[tr.label] && inPath && size >= PATH_MIN_SIZE && ttc < PATH_TTC * this.sensitivity) {
         tr.noticeHits = (tr.noticeHits || 0) + 1;
       } else {
         tr.noticeHits = 0;
@@ -427,7 +435,9 @@ export class HazardWatcher {
     this.lastAlert = { at: nowMs, rank: 0 };
     const cx = tr.box.cx;
     const direction = cx < 0.38 ? 'left' : cx > 0.62 ? 'right' : 'ahead';
-    this.onAlert({ kind: 'notice', label: tr.label, name: NOTICE_LABELS[tr.label], direction, rank: 0, needsName: false });
+    const moving = !!NOTICE_LABELS[tr.label];
+    const name = moving ? NOTICE_LABELS[tr.label] : (tr.refinedName || classInfo(tr.label).name);
+    this.onAlert({ kind: moving ? 'notice' : 'path', label: tr.label, name, direction, rank: 0, needsName: false });
   }
 
   // Something is expanding fast in a zone, whatever it is: warn first, name it after

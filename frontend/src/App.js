@@ -294,7 +294,13 @@ export default function App() {
     const u = new SpeechSynthesisUtterance(text);
     u.rate = priority === 'urgent' ? 1.25 : 1.05;
     u.onend = () => { if (speechRef.current.id === id) speechRef.current.priority = null; };
-    synth.speak(u);
+    // iPhones often drop an utterance spoken right after cancel(): give it a moment
+    if (synth.speaking || synth.pending) {
+      synth.cancel();
+      setTimeout(() => { if (speechRef.current.id === id) synth.speak(u); }, 80);
+    } else {
+      synth.speak(u);
+    }
   };
 
   const playUrl = (url, text, priority, id) => {
@@ -494,7 +500,11 @@ export default function App() {
         if (audioCtxRef.current) audioCtxRef.current.resume();
       } catch { /* no Web Audio: speech and vibration still work */ }
       if (audioRef.current) audioRef.current.play().catch(() => {});
-      if (window.speechSynthesis) window.speechSynthesis.speak(new SpeechSynthesisUtterance(''));
+      if (window.speechSynthesis) { // a real (silent) utterance: an empty one doesn't unlock iPhones
+        const u = new SpeechSynthesisUtterance(' ');
+        u.volume = 0;
+        window.speechSynthesis.speak(u);
+      }
     };
     window.addEventListener('pointerdown', unlock, { once: true });
     window.addEventListener('keydown', unlock, { once: true });
@@ -623,6 +633,14 @@ export default function App() {
   hazardHandlersRef.current.onAlert = (a) => {
     if (fallRef.current) return; // the fall alarm owns the screen and voice
     lastHazardRef.current = Date.now();
+    if (a.kind === 'path') { // something in your way that you're walking toward
+      const where = a.direction === 'ahead' ? 'ahead, in your path' : `ahead, slightly ${a.direction}`;
+      const text = `${a.name} ${where}.`;
+      if (navigator.vibrate) navigator.vibrate([80, 60, 80]);
+      setCaption(text);
+      speak(text, 'high');
+      return;
+    }
     if (a.kind === 'notice') { // calm heads-up, not a collision warning
       const where = a.direction === 'ahead' ? 'ahead of you' : `on your ${a.direction}`;
       const text = `${a.name} is coming toward you, ${where}.`;

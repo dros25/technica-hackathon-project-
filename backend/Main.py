@@ -57,10 +57,12 @@ NARRATE_PROMPT = (
     "and distance if you can tell. No preamble."
 )
 LIVE_PROMPT = (
-    "You are a live guide for a blind person who is walking. Look at what is directly ahead. "
-    "Last time you said: \"{previous}\". If nothing important is new or different, reply with exactly: NOTHING. "
-    "Otherwise reply with ONE short sentence under 15 words, hazards first "
-    "(obstacles, steps, doors, people, vehicles) with direction. No preamble."
+    "You are a live guide for a blind person who is walking forward. Look at the path directly ahead. "
+    "FIRST: if anything is in the walking path within about 3 steps that they could walk into or trip on "
+    "(furniture, a wall, a door, a pole, steps, a curb, a bag on the floor, a person), ALWAYS warn about it, "
+    "even if you said it before, with how close it is, e.g. \"Chair right ahead, about two steps.\" "
+    "Otherwise, last time you said: \"{previous}\". If nothing important is new or different, reply with exactly: NOTHING. "
+    "Else reply with ONE short sentence under 15 words, hazards first with direction. No preamble."
 )
 WRIST_PROMPT = (
     "A blind person is pointing their hand-mounted camera at something and asking what it is. "
