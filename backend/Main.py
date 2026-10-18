@@ -30,9 +30,26 @@ from flask_cors import CORS
 
 from camera import Webcam, difference as camera_difference  # backend/camera.py
 
-load_dotenv()
-
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load_env():
+    """Read backend/.env wherever the server is started from. Handles files Windows Notepad
+    saved with a hidden byte-order mark or as "Unicode" (UTF-16), which otherwise hide keys."""
+    path = os.path.join(BASE_DIR, ".env")
+    if not os.path.exists(path):
+        print(f"[setup] no .env file at {path} - copy .env.example to .env and add your keys")
+        load_dotenv()
+        return
+    raw = open(path, "rb").read()
+    encoding = "utf-16" if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig"
+    load_dotenv(path, encoding=encoding)
+    for name in ("GEMINI_API_KEY", "ELEVENLABS_API_KEY", "OPENROUTER_API_KEY"):
+        if os.getenv(name):
+            os.environ[name] = os.environ[name].strip().strip('"').strip("'")
+
+
+_load_env()
 
 NARRATE_PROMPT = (
     "You are guiding a blind person. In 1-2 short sentences, describe what's directly ahead. "
@@ -200,6 +217,10 @@ def drain_server_events():
 # ---------- AI helpers ----------
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-3.8-flash")
 MOCK_VISION = os.getenv("MOCK_VISION") == "1"  # fake descriptions: test without using API quota
+if MOCK_VISION:
+    print("[ai] MOCK_VISION=1 in .env: using FAKE descriptions. Delete that line for real ones.")
+elif not os.getenv("GEMINI_API_KEY") and not os.getenv("OPENROUTER_API_KEY"):
+    print("[ai] WARNING: no GEMINI_API_KEY found in backend/.env - describing scenes won't work.")
 
 # Each Gemini model has its own free-tier quota. When one runs out, try the others.
 _exhausted_until = {}   # model name -> time when we may try it again
