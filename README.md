@@ -1,8 +1,8 @@
 # SightSea
 
-**A guide for blind and low-vision people.** Wear your phone on your chest (or hold it up), or wear a small camera on your wrist, and SightSea tells you what's in your path and warns about anything coming at you fast. Point the camera at something and press a button to ask "what is this?". A small wearable detects falls and asks people nearby for help.
+**A guide for blind and low-vision people.** Wear your phone on your chest or hold it up, or wear a small camera on your wrist, and SightSea tells you what's in your path and warns about anything coming at you fast. Point the camera at something and press a button to ask "what is this?". A small wearable detects falls and asks people nearby for help.
 
-Built at **Technica 2026** (University of Maryland) by a two-person team.
+Built at **Technica 2026** (University of Maryland) by Diana DeRosa and Ian Yoon. 
 
 ---
 
