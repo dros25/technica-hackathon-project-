@@ -482,7 +482,7 @@ export default function App() {
     setSecondsLeft(seconds);
     setFall('pending');
     setCaption(`Fall detected. Alarm in ${seconds} seconds unless you cancel.`);
-    speak(`Fall detected. The alarm will sound in ${seconds} seconds. Double-click your button, or tap I'm okay, to cancel.`);
+    speak(`Fall detected. The alarm will sound in ${seconds} seconds. Double press a button, or tap I'm okay, to cancel.`);
   }, [speak]);
 
   const soundAlarm = useCallback(() => {
@@ -490,7 +490,15 @@ export default function App() {
     fallRef.current = 'alarm';
     setFall('alarm');
     setCaption('Alarm on. Your wearable is asking people nearby for help.');
-    speak("Alarm on. Asking people nearby for help. Double-click your button, or tap I'm okay, to stop it.");
+    speak("Alarm on. Asking people nearby for help. Double press a button, or tap I'm okay, to stop it.");
+  }, [speak]);
+
+  // "I need help" held on the wearable: same alarm screen, different words
+  const helpAlarm = useCallback(() => {
+    fallRef.current = 'alarm';
+    setFall('alarm');
+    setCaption('Help requested. Your wearable is asking people nearby for help.');
+    speak("Help alarm on. Asking people nearby for help. Double press a button, or tap I'm okay, to stop it.", 'urgent');
   }, [speak]);
 
   useEffect(() => {
@@ -549,6 +557,8 @@ export default function App() {
             // Wearable: hold repeats the last thing said
             const last = lastSaidRef.current;
             if (last) { setCaption(last); speak(last); } else speak('Nothing to repeat yet.');
+          } else if (ev.type === 'help') {
+            helpAlarm();
           } else if (ev.type === 'button') {
             describeRef.current('tap');
           } else if (ev.type === 'wrist_looking') {
@@ -593,7 +603,7 @@ export default function App() {
       }
     }, 1000);
     return () => clearInterval(timer);
-  }, [speak, stopSpeaking, startCountdown, soundAlarm, sendFallDetection]);
+  }, [speak, stopSpeaking, startCountdown, soundAlarm, helpAlarm, sendFallDetection]);
 
   const imOkay = async () => {
     setFall(null);
@@ -717,14 +727,16 @@ export default function App() {
         <details className="settings">
           <summary {...hover('Settings')}>Settings</summary>
 
-          <div className="button-guide" {...hover('Wearable button. Press to describe what is ahead. Double press to switch between tap mode and live guide. Hold to repeat the last thing said. During a fall alarm, double press to cancel.')} tabIndex={0}>
-            <div className="button-guide-title">Wearable button</div>
+          <div className="button-guide" {...hover('Wearable buttons. Button 1: press to describe what is ahead, hold to repeat. Button 2: press to switch between tap mode and live guide, hold 3 seconds to call for help. During an alarm, double press either button to cancel.')} tabIndex={0}>
+            <div className="button-guide-title">Wearable buttons</div>
             <dl>
-              <dt>Press</dt><dd>Describe what&rsquo;s ahead</dd>
-              <dt>Double press</dt><dd>Switch Tap mode / Live guide</dd>
-              <dt>Hold</dt><dd>Repeat the last thing said</dd>
-              <dt>During a fall</dt><dd>Double press to cancel</dd>
+              <dt>Button 1 press</dt><dd>Describe what&rsquo;s ahead</dd>
+              <dt>Button 1 hold</dt><dd>Repeat the last thing said</dd>
+              <dt>Button 2 press</dt><dd>Switch Tap mode / Live guide</dd>
+              <dt>Button 2 hold 3 s</dt><dd>I need help (alarm)</dd>
+              <dt>During an alarm</dt><dd>Double press either button to cancel</dd>
             </dl>
+            <p className="hint">One button only: press = describe, double press = switch mode, hold = repeat, hold 3 s = help.</p>
           </div>
 
           <label className="toggle" {...hover(`Hazard watch in Live guide. Warn me when something comes at me fast. ${hazardOn ? 'On' : 'Off'}`)}>
@@ -801,7 +813,7 @@ export default function App() {
           <p className="countdown" aria-hidden="true">{secondsLeft}</p>
           <p id="fall-desc">
             The alarm sounds in {secondsLeft} {secondsLeft === 1 ? 'second' : 'seconds'}.
-            Double-click your button to cancel.
+            Double press a button to cancel.
           </p>
           <button type="button" className="alarm-ok" onClick={imOkay} autoFocus {...hover("I'm okay. Cancel the alarm")}>
             I'm okay
@@ -812,7 +824,7 @@ export default function App() {
       {fall === 'alarm' && (
         <div className="alarm" role="alertdialog" aria-modal="true" aria-labelledby="alarm-title" aria-describedby="alarm-desc">
           <h2 id="alarm-title">Alarm on</h2>
-          <p id="alarm-desc">Your wearable is asking people nearby for help. Double-click your button to stop it.</p>
+          <p id="alarm-desc">Your wearable is asking people nearby for help. Double press a button to stop it.</p>
           <button type="button" className="alarm-ok" onClick={imOkay} autoFocus {...hover("I'm okay. Stop the alarm")}>
             I'm okay
           </button>

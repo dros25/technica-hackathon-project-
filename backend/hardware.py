@@ -259,6 +259,8 @@ class Hardware:
             self._push({"type": "button_double"})   # double press: switch Tap / Live guide
         elif line == "BTNHOLD":
             self._push({"type": "button_hold"})     # hold: repeat the last thing said
+        elif line == "HELP":
+            self._push({"type": "help"})            # "I need help" held: alarm is sounding
         elif line.startswith("FALL_PENDING"):
             try:
                 seconds = int(line.split(":", 1)[1])

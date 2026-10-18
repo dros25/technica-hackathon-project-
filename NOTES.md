@@ -61,17 +61,17 @@ Tuning lives in the "Tunables" blocks at the top of both files (time-to-contact 
 A USB webcam on the forearm, plugged into the laptop. With it connected, pressing the wearable button describes what the wrist camera sees; the **chest phone speaks** the answer (one voice). Without it, the button describes from the chest camera. Pick the camera with `WRIST_CAMERA=` in `.env`; check the aim at `http://localhost:5000/wrist/snapshot.jpg`.
 
 ### Wearable (`firmware/guardian/guardian.ino`, laptop side `backend/hardware.py`)
-Arduino UNO R4 WiFi + Grove shield: button D2, buzzer D3, light sensor A0, accelerometer and LCD on I2C. Fall = free-fall or impact, then stillness, then a **30 s countdown** (double-click the button or tap "I'm okay" to cancel), then the alarm.
+Arduino UNO R4 WiFi + Grove shield: button 1 on D2, button 2 on D7 (optional), buzzer D3, light sensor A0, accelerometer and LCD on I2C. ("D7" = the shield socket wired to digital pin 7.) Fall = free-fall or impact, then stillness, then a **30 s countdown** (double-click the button or tap "I'm okay" to cancel), then the alarm.
 
-**Button patterns** (one button; detected on the board, also listed in the app's Settings):
-| Press | Action |
-|---|---|
-| Press | Take a photo and describe it (wrist camera if connected, else the chest phone) |
-| Double press | Switch Tap mode / Live guide (spoken) |
-| Hold ~1 s | Repeat the last thing said |
-| During a fall countdown or alarm | Double press cancels; single presses are ignored |
+**Buttons** (detected on the board; also listed in the app's Settings):
+| | Button 1 (D2, round) | Button 2 (D7, ridged) |
+|---|---|---|
+| Press | Describe what's ahead, instantly (wrist camera if connected, else chest phone) | Switch Tap mode / Live guide |
+| Hold ~1 s | Repeat the last thing said | (keep holding) |
+| Hold 3 s | | **I need help**: alarm + "Please help me" on the LCD; chirps each second while counting |
+| During a fall countdown or alarm | Double press either button cancels | single presses are ignored |
 
-A single press acts ~0.4 s after release (it waits to rule out a double press); double and hold act immediately. Timing constants: `MULTI_CLICK_MS`, `HOLD_MS` in the firmware.
+**One button only:** set `#define HAS_BUTTON2 0` at the top of the firmware (an empty pin reads random noise). Then: press = describe (acts ~0.4 s after release, to rule out a double), double press = switch mode, hold 1 s = repeat (on release), hold 3 s = help. Timing constants: `MULTI_CLICK_MS`, `HOLD_MS`, `HELP_HOLD_MS`.
 
 It talks to the laptop over **USB, Wi-Fi, or both** (same messages either way; USB wins when both are up, so nothing is handled twice). The app's status shows which: "Online, wearable on Wi-Fi / USB".
 
@@ -94,7 +94,7 @@ Tips: the Arduino IDE Serial Monitor shows `WIFI:` lines (connecting, IP, not fo
 | `GET /events` | wearable and wrist events for the phone (button, fall, dark...) |
 | `/wrist/describe`, `/wrist/snapshot.jpg` | test the wrist camera |
 | `/lcd`, `/cancel`, `/alarm`, `/fall-detection` | wearable controls |
-| `/test/<fall\|button\|double\|hold\|cancel\|dark>` | fake events for testing (real wearable if connected, else simulated) |
+| `/test/<fall\|button\|double\|hold\|help\|cancel\|dark>` | fake events for testing (real wearable if connected, else simulated) |
 
 ---
 
@@ -112,13 +112,12 @@ Tips: the Arduino IDE Serial Monitor shows `WIFI:` lines (connecting, IP, not fo
 **Built**
 - Phone app: tap-to-describe, Live guide, hazard watch (object + looming), spoken warnings with follow-up names, settings, wearable message editor
 - Backend: Gemini with model fallback, ElevenLabs voice (optional), OpenRouter backup, wrist camera, `/identify`
-- Wearable: fall detection with countdown, light sensor, LCD, buzzer, button; USB or Wi-Fi (phone hotspot, powered by the iPhone)
+- Wearable: fall detection with countdown, "I need help" hold, light sensor, LCD, buzzer, two buttons (or one with press patterns); USB or Wi-Fi (phone hotspot, powered by the iPhone)
 - `start.bat` one-click setup and public link
 - Poster (design canvas in claude.ai)
 
 **Planned / ideas, not built yet**
 - Cane sleeve: elastic wrap with two buttons (round = ask / double = Live guide; ridged = repeat / hold = I'm okay) and a vibration motor for hazard buzzes
-- Second Grove button on D4 (press patterns on one button are done)
 - Fall countdown 10 s for demos (currently 30 s)
 - Always-on cloud hosting (Google Cloud Run), so the website works without the laptop
 - "What's connected" panel in the app
