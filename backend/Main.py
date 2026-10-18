@@ -202,6 +202,13 @@ hw = load_hardware()
 webcam = Webcam()
 wrist = webcam
 
+# Live guide with the wearable camera (an optional extra; the main setup is the phone on the chest):
+# only ask the AI when the webcam's view has changed, or at least every LIVE_RECHECK_S seconds.
+# Same numbers as the phone's own check in App.js (LIVE_CHANGE, LIVE_RECHECK_MS).
+LIVE_CHANGE = 12        # average pixel change (0-255) that counts as a new scene
+LIVE_RECHECK_S = 20     # re-check an unchanged scene this often
+_wearable_live = {"sig": None, "at": 0.0}  # last scene sent to the AI, and when
+
 # Events the server itself creates (wrist descriptions, simulated tests), handed to the phone
 _server_events = []
 _events_lock = threading.Lock()
