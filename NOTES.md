@@ -89,6 +89,8 @@ The Live guide's Gemini check (every few seconds) follows the same rule: only th
 Tuning lives in the "Tunables" blocks at the top of both files (time-to-contact limits per class, confirmation frames, looming thresholds). The Settings sensitivity (low/normal/high) scales all limits.
 
 ### Wrist camera, "point to ask" (`backend/camera.py`)
+**Optional extra.** The plan for the demo is the **phone strapped to the chest** only; the USB webcam gets added only if everything else is done and working. Keep Settings > Camera on **Phone**.
+
 A USB webcam on the forearm, plugged into the laptop. With it connected, pressing the wearable button describes what the wrist camera sees; the **chest phone speaks** the answer (one voice). Without it, the button describes from the chest camera. Pick the camera with `WRIST_CAMERA=` in `.env` (default 1; 0 is usually the laptop's own camera); check the aim at `http://localhost:5000/wrist/snapshot.jpg`.
 
 The same webcam also powers **Settings > Camera > Wearable**: the app's camera view shows it (`/camera/stream`) and Tap / Live guide describe from it (`/narrate` with `source=wearable`; the server skips the AI when the view hasn't changed). Hazard watch needs the phone's own video, so it pauses in that mode. One module (`camera.py`) serves both, so they never fight over the camera.
