@@ -32,8 +32,8 @@ const ALERT_PHRASES = [
 ];
 // Said when you change something; pre-made too, so they're never in the phone voice
 const UI_PHRASES = [
-  "Live guide on. I'll warn you if something comes at you fast, and speak when something new appears.",
-  "Live guide on. I'll speak when something new appears.",
+  "Live guide on. I'll tell you about anything in your path, and warn you if something comes at you fast.",
+  "Live guide on. I'll tell you about anything in your path.",
   'Tap mode on. Tap the camera view or press your button to hear what is ahead.',
   'Using the wearable camera. Press your button to hear what is ahead.',
   'Using the phone camera.',
@@ -41,7 +41,7 @@ const UI_PHRASES = [
   'Hazard warnings on in Live guide.', 'Hazard warnings off.',
   'Settings.', 'Settings closed.', 'Settings', 'Close settings',
   'Tap mode. Describe the scene only when I ask',
-  'Live guide. Speak up whenever something new appears',
+  'Live guide. Tell me about anything in my path',
   'Wearable display updated.',
   'Wearable connected over Wi-Fi.', 'Wearable connected by cable.', 'Wearable disconnected.',
   'Looking where you are pointing…',
@@ -503,13 +503,15 @@ export default function App() {
     for (let i = 0; i < count; i++) {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.type = 'square';
-      osc.frequency.value = 1100;
-      gain.gain.value = 0.25;
+      osc.type = 'sine';             // a soft chime, not a buzzer
+      osc.frequency.value = 880;
       osc.connect(gain).connect(ctx.destination);
-      const t = start + i * 0.18;
+      const t = start + i * 0.2;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.18, t + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
       osc.start(t);
-      osc.stop(t + 0.11);
+      osc.stop(t + 0.17);
     }
   }, []);
 
@@ -625,7 +627,11 @@ export default function App() {
       if (kind === 'live') {
         liveRef.current.at = Date.now();
         if (!data.text) return; // nothing new worth saying
+        const norm = (x) => (x || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+        const same = norm(data.text) === norm(liveRef.current.text);
+        if (same && Date.now() - (liveRef.current.spokeAt || 0) < 15000) return; // said that just now
         liveRef.current.text = data.text;
+        liveRef.current.spokeAt = Date.now();
       }
       setCaption(data.text);
       if (data.audio) playAudio(data.audio, data.text);
@@ -860,8 +866,8 @@ export default function App() {
       ? (cameraSource === 'wearable'
         ? "Live guide on, using the wearable camera. Hazard watch needs the phone camera, so it's paused."
         : hazardOn
-        ? "Live guide on. I'll warn you if something comes at you fast, and speak when something new appears."
-        : "Live guide on. I'll speak when something new appears.")
+        ? "Live guide on. I'll tell you about anything in your path, and warn you if something comes at you fast."
+        : "Live guide on. I'll tell you about anything in your path.")
       : 'Tap mode on. Tap the camera view or press your button to hear what is ahead.';
     setCaption(msg);
     speak(msg);
@@ -1170,7 +1176,7 @@ export default function App() {
             aria-checked={mode === 'live'}
             className="mode"
             onClick={() => chooseMode('live')}
-            {...hover('Live guide. Speak up whenever something new appears')}
+            {...hover('Live guide. Tell me about anything in my path')}
           >
             <span className="mode-icon" aria-hidden="true"><SonarIcon /></span>
             <span className="mode-text">
