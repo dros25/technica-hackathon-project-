@@ -19,6 +19,7 @@ Run:   cd backend && python Main.py
 import base64
 import hashlib
 import re
+import collections
 import os
 import threading
 import time
@@ -577,8 +578,41 @@ def camera_stream():
                     headers={"Cache-Control": "no-store"})
 
 
+# Every open page sees every event: new events go into a numbered log and each page asks
+# for the ones after the last number it saw (?since=N). Before, the first page to ask took
+# the event and any other open page (an old tab, a laptop browser) never saw it.
+_event_log = collections.deque(maxlen=200)
+_event_seq = 0
+_event_log_lock = threading.Lock()
+
+
 @app.route("/events", methods=["GET"])
 def events():
+    global _event_seq
+    with _event_log_lock:
+        for ev in _collect_new_events():
+            _event_seq += 1
+            _event_log.append((_event_seq, ev))
+        since = request.args.get("since", type=int)
+        if since is None:
+            out = []  # a page's first poll: start from now, don't replay old alerts
+        else:
+            if since > _event_seq:  # server restarted since that page last asked
+                since = 0
+            out = [ev for n, ev in _event_log if n > since]
+        last = _event_seq
+    return jsonify({
+        "events": out,
+        "last": last,
+        "light": hw.light,
+        "connected": getattr(hw, "connected", True),
+        "link": getattr(hw, "link", None),
+        "mock": getattr(hw, "is_mock", False),
+        "fall_detection": getattr(hw, "fall_detection", True),
+    })
+
+
+def _collect_new_events():
     out = []
     for ev in hw.get_events():
         # With the webcam plugged in, the wearable button means "what am I pointing at?".
@@ -589,14 +623,7 @@ def events():
         else:
             out.append(ev)
     out.extend(drain_server_events())
-    return jsonify({
-        "events": out,
-        "light": hw.light,
-        "connected": getattr(hw, "connected", True),
-        "link": getattr(hw, "link", None),
-        "mock": getattr(hw, "is_mock", False),
-        "fall_detection": getattr(hw, "fall_detection", True),
-    })
+    return out
 
 
 @app.route("/wrist/describe", methods=["POST", "GET"])

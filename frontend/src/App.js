@@ -856,10 +856,15 @@ export default function App() {
 
   // ---------- Wearable events ----------
   useEffect(() => {
+    let since = null; // number of the last event this page has seen
+    let busy = false; // a slow poll must not overlap the next one (it would repeat events)
     const timer = setInterval(async () => {
+      if (busy) return;
+      busy = true;
       try {
-        const res = await api('/events');
+        const res = await api(since === null ? '/events' : `/events?since=${since}`);
         const data = await res.json();
+        if (typeof data.last === 'number') since = data.last;
         setOnline(true);
         setWearable({ connected: data.connected !== false, mock: !!data.mock, link: data.link || null });
         // Server or wearable restarted with a different setting: put the user's choice back
@@ -908,6 +913,8 @@ export default function App() {
         });
       } catch {
         setOnline(false);
+      } finally {
+        busy = false;
       }
     }, 1000);
     return () => clearInterval(timer);
