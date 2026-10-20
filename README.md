@@ -96,4 +96,4 @@ More detail for developers is in [NOTES.md](NOTES.md).
 
 ## Built with
 
-Arduino (C++) · Python · Flask · OpenCV · pyserial · Google Gemini · ElevenLabs · OpenRouter · React · MediaPipe Tasks Vision · ngrok
+Arduino (C++) · Python · Flask · OpenCV · pyserial · Google Gemini · ElevenLabs · OpenRouter · React · MediaPipe Tasks Vision · ngrok · Claude
